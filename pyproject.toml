@@ -1,0 +1,75 @@
+[tool.poetry]
+name = "stockflow-api"
+version = "1.0.0"
+description = "High-integrity inventory and order management engine with atomic transactions, database-level concurrency control, persistent idempotency, and immutable audit trails."
+authors = ["StockFlow Engineering <engineering@stockflow.local>"]
+readme = "README.md"
+packages = [{ include = "stockflow", from = "src" }]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+fastapi = "^0.115.0"
+uvicorn = { extras = ["standard"], version = "^0.32.0" }
+sqlalchemy = { extras = ["asyncio"], version = "^2.0.36" }
+asyncpg = "^0.30.0"
+psycopg = { extras = ["binary"], version = "^3.2.3" }
+alembic = "^1.14.0"
+pydantic = { extras = ["email"], version = "^2.10.0" }
+pydantic-settings = "^2.6.1"
+pwdlib = { extras = ["argon2"], version = "^0.2.1" }
+pyjwt = "^2.10.0"
+python-multipart = "^0.0.17"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.3.3"
+pytest-asyncio = "^0.24.0"
+pytest-cov = "^6.0.0"
+httpx = "^0.28.0"
+asgi-lifespan = "^2.1.0"
+ruff = "^0.8.0"
+mypy = "^1.13.0"
+
+[build-system]
+requires = ["poetry-core>=1.9.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "SIM", # flake8-simplify
+]
+ignore = ["B008"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["stockflow"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+plugins = ["pydantic.mypy"]
+mypy_path = "src"
+
+[[tool.mypy.overrides]]
+module = ["asyncpg.*", "pwdlib.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-v --tb=short"
