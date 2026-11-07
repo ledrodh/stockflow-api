@@ -9,7 +9,7 @@
 ![React](https://img.shields.io/badge/Frontend-React_18_%2B_Vite-61dafb)
 ![Tailwind](https://img.shields.io/badge/Styling-Tailwind_CSS-38bdf8)
 
-**StockFlow API** is a high-integrity inventory and order management engine engineered to **guarantee absolute data consistency under heavy stress and real-world database contention**. Moving beyond simple CRUD patterns, StockFlow implements ACID atomic transactions, pessimistic concurrency control with deadlock prevention (`SELECT ... FOR UPDATE`), database-backed persistent idempotency, and an Append-Only Immutable Inventory Ledger.
+**StockFlow API** is a transactional inventory management engine with database-enforced integrity, atomic order processing, pessimistic concurrency control (`SELECT ... FOR UPDATE`), database-backed persistent idempotency, and an Append-Only Immutable Inventory Ledger. Moving beyond simple CRUD patterns, StockFlow implements ACID atomic transactions, pessimistic locking with lock-inversion deadlock prevention, and multi-layered audit trails.
 
 ---
 
@@ -166,6 +166,47 @@ sequenceDiagram
     end
 ```
 
+### 3. Order Cancellation and Inventory Restock Engine
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Customer / Admin
+    participant API as FastAPI (/orders/{id}/cancel)
+    participant Svc as OrderService
+    participant DB as PostgreSQL 16 (ACID)
+
+    Client->>API: POST /api/v1/orders/{order_id}/cancel
+    API->>Svc: cancel_order_atomic(order_id, user_id, is_admin)
+
+    Svc->>DB: BEGIN TRANSACTION + SET LOCAL lock_timeout = '5000ms'
+    Svc->>DB: SELECT * FROM orders WHERE id = :order_id FOR UPDATE
+
+    alt Order not found or permission denied
+        Svc->>DB: ROLLBACK
+        Svc-->>API: Raise NotFoundError / PermissionDeniedError
+        API-->>Client: 404 Not Found / 403 Forbidden
+    else Order is already CANCELLED
+        Svc->>DB: COMMIT (read-only commit)
+        Svc-->>API: OrderResponse (idempotent replay)
+        API-->>Client: 200 OK (replays current state without double-restocking)
+    else Order status != CONFIRMED
+        Svc->>DB: ROLLBACK
+        Svc-->>API: Raise ConflictError
+        API-->>Client: 409 Conflict (invalid transition)
+    else Order is CONFIRMED
+        Svc->>DB: SELECT * FROM products WHERE id IN (...) ORDER BY id ASC FOR UPDATE
+        DB-->>Svc: Product rows locked deterministically
+        Svc->>DB: UPDATE products SET stock_quantity = stock_quantity + :qty (Restock items)
+        Svc->>DB: INSERT INTO inventory_movements (type='RETURN', previous_stock, new_stock)
+        Svc->>DB: UPDATE orders SET status = 'CANCELLED'
+        Svc->>DB: COMMIT TRANSACTION
+        DB-->>Svc: Transaction committed
+        Svc-->>API: OrderResponse (status=CANCELLED)
+        API-->>Client: 200 OK (OrderResponse)
+    end
+```
+
 ---
 
 ## 📚 Architecture Decision Records (ADRs)
@@ -194,7 +235,7 @@ StockFlow includes a responsive **Single Page Application (SPA)** in [`frontend/
 
 ```text
 StockFlow API/
-├── .github/workflows/main.yml       # CI/CD Pipeline (Ruff, Mypy, Pytest w/ Postgres, Docker Build)
+├── .github/workflows/main.yml       # CI & Docker Validation Pipeline (Ruff, Mypy, Pytest, Vitest, Docker)
 ├── docs/adr/                        # Architecture Decision Records (ADR-001 to ADR-003)
 ├── frontend/                        # React + TypeScript + Vite + Tailwind CSS Dashboard
 │   ├── src/
@@ -306,7 +347,8 @@ poetry run mypy src tests
 | Method | Endpoint | Auth | Description |
 | :--- | :--- | :--- | :--- |
 | `GET` | `/health` | Public | Real database connectivity check (`SELECT 1`) |
-| `GET` | `/api/v1/dashboard/summary` | Public / Auth | Aggregated inventory KPIs, recent orders, and ledger movements |
+| `GET` | `/api/v1/dashboard/summary` | **Admin** | Aggregated inventory KPIs, recent orders, and ledger movements |
+| `POST` | `/api/v1/dashboard/maintenance/cleanup-idempotency` | **Admin** | Purge expired idempotency keys on demand |
 | `POST` | `/api/v1/auth/register` | Public | Customer account registration (`role` injection is blocked) |
 | `POST` | `/api/v1/auth/login` | Public | JSON login issuing a short-lived signed JWT |
 | `GET` | `/api/v1/auth/me` | Authenticated | Current user profile |
@@ -316,8 +358,9 @@ poetry run mypy src tests
 | `DELETE` | `/api/v1/products/{id}` | **Admin** | **Soft delete** (`is_active = False`), preserving historical integrity |
 | `POST` | `/api/v1/orders` | Authenticated | Atomic order purchase (`SELECT FOR UPDATE`) with `Idempotency-Key` |
 | `GET` | `/api/v1/orders` | Authenticated | List orders with preserved historical line snapshots |
+| `POST` | `/api/v1/orders/{id}/cancel` | Authenticated | Atomically cancel order, restock items with locks, and append `RETURN` |
 | `POST` | `/api/v1/inventory/movements` | **Admin** | Append manual stock movement (`IN`, `OUT`, `ADJUSTMENT`, `RETURN`) |
-| `GET` | `/api/v1/inventory/movements` | Authenticated | Query immutable audit log of inventory movements |
+| `GET` | `/api/v1/inventory/movements` | **Admin** | Query immutable audit log of inventory movements |
 
 ---
 

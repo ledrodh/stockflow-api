@@ -14,9 +14,6 @@ from stockflow.models.inventory import InventoryMovement, MovementType
 from stockflow.models.product import Product
 from stockflow.models.user import User, UserRole
 
-DEFAULT_ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@stockflow.io")
-DEFAULT_ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "AdminPassword123!")
-
 DEMO_PRODUCTS = [
     {
         "sku": "MACBOOK-M3-MAX",
@@ -63,30 +60,53 @@ DEMO_PRODUCTS = [
 
 async def seed_demo_data() -> None:
     """Populate database with default admin user and demo catalog products with ledger entries."""
-    if settings.APP_ENV == "production" and not settings.ENABLE_DEMO_SEED:
-        print(
-            "[ERROR] Seeding demo data is blocked in production mode. "
-            "Set ENABLE_DEMO_SEED=true and supply explicit ADMIN_EMAIL / ADMIN_PASSWORD "
-            "environment variables to proceed.",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    if settings.APP_ENV == "production":
+        if not settings.ENABLE_DEMO_SEED:
+            print(
+                "[ERROR] Seeding demo data is blocked in production mode. "
+                "ENABLE_DEMO_SEED=true is required.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        admin_email = os.getenv("ADMIN_EMAIL")
+        admin_password = os.getenv("ADMIN_PASSWORD")
+
+        if not admin_email or not admin_password:
+            print(
+                "[ERROR] In production, explicit ADMIN_EMAIL and ADMIN_PASSWORD "
+                "environment variables are strictly mandatory.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        weak_passwords = {"AdminPassword123!", "admin", "password", "12345678", "stockflow"}
+        if admin_password in weak_passwords or len(admin_password) < 12:
+            print(
+                "[ERROR] In production, ADMIN_PASSWORD cannot be a known default or "
+                "weaker than 12 characters.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+    else:
+        admin_email = os.getenv("ADMIN_EMAIL", "admin@stockflow.io")
+        admin_password = os.getenv("ADMIN_PASSWORD", "AdminPassword123!")
 
     async with AsyncSessionLocal() as session:
         # 1. Admin User
-        admin_stmt = select(User).where(User.email == DEFAULT_ADMIN_EMAIL)
+        admin_stmt = select(User).where(User.email == admin_email)
         admin = (await session.execute(admin_stmt)).scalar_one_or_none()
         if admin is None:
             admin = User(
-                email=DEFAULT_ADMIN_EMAIL,
-                hashed_password=get_password_hash(DEFAULT_ADMIN_PASSWORD),
+                email=admin_email,
+                hashed_password=get_password_hash(admin_password),
                 full_name="StockFlow Admin",
                 role=UserRole.ADMIN.value,
                 is_active=True,
             )
             session.add(admin)
             await session.flush()
-            print(f"[OK] Admin created: {DEFAULT_ADMIN_EMAIL}")
+            print(f"[OK] Admin created: {admin_email}")
 
         # 2. Customer User (non-production only)
         if settings.APP_ENV != "production":

@@ -97,6 +97,10 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Run frontend tests (Vitest & React Testing Library)
+        working-directory: frontend
+        run: npm test
+
       - name: Build and typecheck frontend
         working-directory: frontend
         run: npm run build

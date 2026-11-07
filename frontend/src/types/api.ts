@@ -22,6 +22,7 @@ export interface Product {
   description: string | null;
   price: string;
   stock_quantity: number;
+  min_stock: number;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -33,6 +34,7 @@ export interface ProductCreatePayload {
   description?: string;
   price: number;
   stock_quantity: number;
+  min_stock?: number;
 }
 
 export interface OrderItem {

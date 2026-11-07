@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import DBAPIError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
@@ -60,6 +61,22 @@ class IdempotencyConflictError(ConflictError):
     error_code = "IDEMPOTENCY_CONFLICT"
 
 
+class DatabaseLockTimeoutError(StockFlowException):
+    """Raised when PostgreSQL row lock acquisition times out under contention (HTTP 503)."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    error_code = "LOCK_TIMEOUT"
+
+    def __init__(
+        self,
+        message: str = (
+            "Database row lock acquisition timed out under concurrent contention. Please retry."
+        ),
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message, details)
+
+
 class DomainValidationError(StockFlowException):
     """Raised when business rule validation fails (HTTP 422)."""
 
@@ -93,10 +110,32 @@ def register_exception_handlers(app: FastAPI) -> None:
         headers: dict[str, str] = {}
         if exc.status_code == status.HTTP_401_UNAUTHORIZED:
             headers["WWW-Authenticate"] = "Bearer"
+        elif exc.status_code == status.HTTP_503_SERVICE_UNAVAILABLE:
+            headers["Retry-After"] = "1"
         return JSONResponse(
             status_code=exc.status_code,
             content=build_error_payload(exc.error_code, exc.message, exc.details),
             headers=headers,
+        )
+
+    @app.exception_handler(DBAPIError)
+    async def dbapi_exception_handler(_request: Request, exc: DBAPIError) -> JSONResponse:
+        orig = getattr(exc, "orig", None)
+        pgcode = getattr(orig, "pgcode", None) or getattr(orig, "sqlstate", None)
+        error_str = str(exc).lower()
+        if pgcode == "55P03" or "55p03" in error_str or "lock_not_available" in error_str:
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content=build_error_payload(
+                    "LOCK_TIMEOUT",
+                    "Database row lock acquisition timed out under contention. Please retry.",
+                    {"retryable": True},
+                ),
+                headers={"Retry-After": "1"},
+            )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content=build_error_payload("DATABASE_ERROR", "A database error occurred."),
         )
 
     @app.exception_handler(StarletteHTTPException)

@@ -14,10 +14,11 @@ import { useAuth } from "../context/AuthContext";
 import { InventoryMovement, MovementType, Product } from "../types/api";
 
 export const InventoryView: React.FC = () => {
-  const { isAdmin } = useAuth();
+  const { user, isAdmin, loading: authLoading } = useAuth();
   const [movements, setMovements] = useState<InventoryMovement[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
@@ -35,7 +36,12 @@ export const InventoryView: React.FC = () => {
   const [modalError, setModalError] = useState<string | null>(null);
 
   const fetchMovements = async () => {
+    if (!isAdmin) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
+    setError(null);
     try {
       const res = await api.getInventoryMovements({
         type: typeFilter || undefined,
@@ -45,13 +51,18 @@ export const InventoryView: React.FC = () => {
       setMovements(res.items);
       setTotal(res.total);
     } catch (err: any) {
-      console.error(err);
+      setError(
+        err?.status === 403
+          ? "HTTP 403 Forbidden: Administrator role is required to view the inventory ledger."
+          : err?.message || "Failed to load audit ledger movements."
+      );
     } finally {
       setLoading(false);
     }
   };
 
   const fetchProducts = async () => {
+    if (!isAdmin) return;
     try {
       const res = await api.getProducts({ limit: 100 });
       setProducts(res.items);
@@ -61,14 +72,42 @@ export const InventoryView: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchMovements();
-  }, [typeFilter, page]);
+    if (!authLoading) {
+      fetchMovements();
+    }
+  }, [authLoading, isAdmin, typeFilter, page]);
 
   useEffect(() => {
     if (isAdmin) {
       fetchProducts();
     }
   }, [isAdmin]);
+
+  if (authLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 space-y-3">
+        <Loader2 className="w-8 h-8 text-brand-500 animate-spin" />
+        <p className="text-sm text-slate-400">Authenticating access...</p>
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <div className="max-w-2xl mx-auto mt-12 p-8 bg-slate-900 border border-slate-800 rounded-3xl text-center space-y-4 shadow-xl">
+        <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+          <ShieldAlert className="w-7 h-7" />
+        </div>
+        <h3 className="text-xl font-bold text-white">Administrator Access Required</h3>
+        <p className="text-sm text-slate-400 leading-relaxed">
+          The Append-Only Inventory Ledger (movements audit trail, stock adjustments, and supplier restock entries) is strictly restricted to system administrators (Role: <code>admin</code>).
+        </p>
+        <p className="text-xs text-slate-400">
+          Current session: <span className="font-semibold text-slate-300">{user?.email || "Anonymous"}</span> (Role: <span className="font-mono text-brand-400">{user?.role || "none"}</span>)
+        </p>
+      </div>
+    );
+  }
 
   const handleCreateMovement = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,7 +138,7 @@ export const InventoryView: React.FC = () => {
     <div className="space-y-6 animate-fade-in">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-white tracking-tight">Audit Ledger (Double-Entry Feed)</h2>
+          <h2 className="text-2xl font-bold text-white tracking-tight">Append-Only Audit Ledger</h2>
           <p className="text-sm text-slate-400 mt-1">
             Immutable transaction history enforced by native PostgreSQL database triggers
           </p>
@@ -115,6 +154,12 @@ export const InventoryView: React.FC = () => {
           </button>
         )}
       </div>
+
+      {error && (
+        <div className="p-4 rounded-xl bg-rose-950/60 border border-rose-500/40 text-rose-300 text-sm">
+          {error}
+        </div>
+      )}
 
       {/* Info Callout */}
       <div className="p-4 rounded-2xl bg-slate-900 border border-slate-800 flex items-start gap-3">

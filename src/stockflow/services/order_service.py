@@ -7,12 +7,13 @@ from decimal import Decimal
 from uuid import UUID, uuid4
 
 from sqlalchemy import delete, func, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stockflow.core.config import settings
 from stockflow.core.exceptions import (
     ConflictError,
+    DatabaseLockTimeoutError,
     IdempotencyConflictError,
     InsufficientStockError,
     NotFoundError,
@@ -252,10 +253,16 @@ async def create_order_atomic(
         if session.in_transaction():
             await session.rollback()
 
-        # Differentiate idempotency constraint violations from foreign keys or check constraints
-        error_text = str(exc).lower()
+        # Strictly inspect PostgreSQL unique constraint violation on uq_idempotency_user_key
+        orig = getattr(exc, "orig", None)
+        pgcode = getattr(orig, "pgcode", None) or getattr(orig, "sqlstate", None)
+        constraint = getattr(orig, "constraint_name", None)
+
         is_idempotency_violation = (
-            "uq_idempotency_user_key" in error_text or "idempotency_keys" in error_text
+            pgcode == "23505" and constraint == "uq_idempotency_user_key"
+        ) or (
+            "uq_idempotency_user_key" in str(exc).lower()
+            and ("23505" in str(exc) or "unique" in str(exc).lower())
         )
         if not is_idempotency_violation:
             raise
@@ -269,6 +276,21 @@ async def create_order_atomic(
             "Concurrent request with the same Idempotency-Key detected.",
             details={"idempotency_key": clean_key},
         ) from exc
+    except DBAPIError as exc:
+        if session.in_transaction():
+            await session.rollback()
+        orig = getattr(exc, "orig", None)
+        pgcode = getattr(orig, "pgcode", None) or getattr(orig, "sqlstate", None)
+        if (
+            pgcode == "55P03"
+            or "55p03" in str(exc).lower()
+            or "lock_not_available" in str(exc).lower()
+        ):
+            raise DatabaseLockTimeoutError(
+                "Order checkout timed out waiting for inventory lock. Please retry.",
+                details={"retryable": True},
+            ) from exc
+        raise
 
 
 async def cancel_order_atomic(
@@ -287,63 +309,81 @@ async def cancel_order_atomic(
     if session.in_transaction():
         await session.rollback()
 
-    async with session.begin():
-        await session.execute(text(f"SET LOCAL lock_timeout = '{settings.DB_LOCK_TIMEOUT_MS}ms'"))
-
-        stmt = select(Order).where(Order.id == order_id).with_for_update()
-        order = (await session.execute(stmt)).scalar_one_or_none()
-        if order is None:
-            raise NotFoundError(
-                f"Order '{order_id}' not found.",
-                details={"order_id": str(order_id)},
+    try:
+        async with session.begin():
+            await session.execute(
+                text(f"SET LOCAL lock_timeout = '{settings.DB_LOCK_TIMEOUT_MS}ms'")
             )
 
-        if not is_admin and order.user_id != user_id:
-            raise PermissionDeniedError("You do not have permission to cancel this order.")
+            stmt = select(Order).where(Order.id == order_id).with_for_update()
+            order = (await session.execute(stmt)).scalar_one_or_none()
+            if order is None:
+                raise NotFoundError(
+                    f"Order '{order_id}' not found.",
+                    details={"order_id": str(order_id)},
+                )
 
-        # Idempotent check: if already cancelled, return existing state without duplicate restock
-        if order.status == OrderStatus.CANCELLED.value:
+            if not is_admin and order.user_id != user_id:
+                raise PermissionDeniedError("You do not have permission to cancel this order.")
+
+            # Idempotent check: if already cancelled, return existing state
+            if order.status == OrderStatus.CANCELLED.value:
+                return OrderResponse.model_validate(order)
+
+            if order.status != OrderStatus.CONFIRMED.value:
+                raise ConflictError(
+                    f"Cannot cancel order in status '{order.status}'.",
+                    details={"status": order.status},
+                )
+
+            # Sort products and lock them deterministically
+            product_ids = sorted([item.product_id for item in order.items])
+            prod_stmt = (
+                select(Product)
+                .where(Product.id.in_(product_ids))
+                .order_by(Product.id.asc())
+                .with_for_update()
+            )
+            locked_products = (await session.execute(prod_stmt)).scalars().all()
+            products_by_id = {prod.id: prod for prod in locked_products}
+
+            # Restock products and append immutable RETURN audit movements
+            for item in order.items:
+                product = products_by_id[item.product_id]
+                previous_stock = product.stock_quantity
+                new_stock = previous_stock + item.quantity
+                product.stock_quantity = new_stock
+
+                movement = InventoryMovement(
+                    product_id=product.id,
+                    type=MovementType.RETURN.value,
+                    quantity=item.quantity,
+                    previous_stock=previous_stock,
+                    new_stock=new_stock,
+                    reference_id=str(order.id),
+                    reason=f"Restock from cancelled order {order.id}",
+                    created_by=user_id,
+                )
+                session.add(movement)
+
+            order.status = OrderStatus.CANCELLED.value
+            await session.flush()
             return OrderResponse.model_validate(order)
-
-        if order.status != OrderStatus.CONFIRMED.value:
-            raise ConflictError(
-                f"Cannot cancel order in status '{order.status}'.",
-                details={"status": order.status},
-            )
-
-        # Sort products and lock them deterministically
-        product_ids = sorted([item.product_id for item in order.items])
-        prod_stmt = (
-            select(Product)
-            .where(Product.id.in_(product_ids))
-            .order_by(Product.id.asc())
-            .with_for_update()
-        )
-        locked_products = (await session.execute(prod_stmt)).scalars().all()
-        products_by_id = {prod.id: prod for prod in locked_products}
-
-        # Restock products and append immutable RETURN audit movements
-        for item in order.items:
-            product = products_by_id[item.product_id]
-            previous_stock = product.stock_quantity
-            new_stock = previous_stock + item.quantity
-            product.stock_quantity = new_stock
-
-            movement = InventoryMovement(
-                product_id=product.id,
-                type=MovementType.RETURN.value,
-                quantity=item.quantity,
-                previous_stock=previous_stock,
-                new_stock=new_stock,
-                reference_id=str(order.id),
-                reason=f"Restock from cancelled order {order.id}",
-                created_by=user_id,
-            )
-            session.add(movement)
-
-        order.status = OrderStatus.CANCELLED.value
-        await session.flush()
-        return OrderResponse.model_validate(order)
+    except DBAPIError as exc:
+        if session.in_transaction():
+            await session.rollback()
+        orig = getattr(exc, "orig", None)
+        pgcode = getattr(orig, "pgcode", None) or getattr(orig, "sqlstate", None)
+        if (
+            pgcode == "55P03"
+            or "55p03" in str(exc).lower()
+            or "lock_not_available" in str(exc).lower()
+        ):
+            raise DatabaseLockTimeoutError(
+                "Order cancellation timed out waiting for inventory lock. Please retry.",
+                details={"retryable": True},
+            ) from exc
+        raise
 
 
 async def get_order_by_id(

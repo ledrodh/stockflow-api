@@ -26,7 +26,7 @@ export const OrdersView: React.FC = () => {
   const [selectedQuantity, setSelectedQuantity] = useState<number>(1);
 
   // Idempotency state
-  const [idempotencyKey, setIdempotencyKey] = useState<string>(() => `checkout-${Date.now()}`);
+  const [idempotencyKey, setIdempotencyKey] = useState<string>(() => crypto.randomUUID());
 
   // Feedback states
   const [submitting, setSubmitting] = useState(false);
@@ -80,7 +80,7 @@ export const OrdersView: React.FC = () => {
   };
 
   const generateNewIdempotencyKey = () => {
-    setIdempotencyKey(`checkout-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`);
+    setIdempotencyKey(crypto.randomUUID());
     setSuccessOrder(null);
     setErrorFeedback(null);
   };
@@ -106,9 +106,10 @@ export const OrdersView: React.FC = () => {
       const order = await api.createOrder(payload, idempotencyKey);
       setSuccessOrder(order);
       setCart([]);
-      generateNewIdempotencyKey();
+      setIdempotencyKey(crypto.randomUUID());
       fetchData();
     } catch (err: any) {
+      // Preserve current idempotency key so retry tests idempotency retransmission
       setErrorFeedback({
         status: err?.status,
         message: err?.message || "Atomic transaction failed.",

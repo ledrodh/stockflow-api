@@ -72,3 +72,27 @@ async def test_dashboard_summary_requires_admin(
     # Customer role -> 403
     forbidden_resp = await client.get("/api/v1/dashboard/summary", headers=customer_headers)
     assert forbidden_resp.status_code == 403
+
+
+async def test_dashboard_maintenance_cleanup_idempotency(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    customer_headers: dict[str, str],
+) -> None:
+    """Verify on-demand idempotency cleanup requires admin privileges."""
+    # Customer forbidden -> 403
+    cust_resp = await client.post(
+        "/api/v1/dashboard/maintenance/cleanup-idempotency",
+        headers=customer_headers,
+    )
+    assert cust_resp.status_code == 403
+
+    # Admin allowed -> 200
+    admin_resp = await client.post(
+        "/api/v1/dashboard/maintenance/cleanup-idempotency",
+        headers=admin_headers,
+    )
+    assert admin_resp.status_code == 200
+    data = admin_resp.json()
+    assert "purged_keys" in data
+    assert isinstance(data["purged_keys"], int)

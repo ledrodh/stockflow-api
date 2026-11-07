@@ -25,26 +25,38 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
       label: "Dashboard",
       icon: LayoutDashboard,
       desc: "Overview & key metrics",
+      adminOnly: true,
     },
     {
       id: "products" as NavTab,
       label: "Catalog",
       icon: Package,
       desc: "Products & inventory",
+      adminOnly: false,
     },
     {
       id: "orders" as NavTab,
       label: "Sales Terminal",
       icon: ShoppingCart,
       desc: "Atomic orders & idempotency",
+      adminOnly: false,
     },
     {
       id: "inventory" as NavTab,
       label: "Audit Ledger",
       icon: History,
       desc: "Immutable stock trail",
+      adminOnly: true,
     },
   ];
+
+  const visibleNavItems = navItems.filter((item) => {
+    // Hide administrative management options for customer accounts
+    if (user && !isAdmin && item.adminOnly) {
+      return false;
+    }
+    return true;
+  });
 
   return (
     <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col justify-between shrink-0">
@@ -67,7 +79,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
 
         {/* Navigation Links */}
         <nav className="p-4 space-y-1.5">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
             return (

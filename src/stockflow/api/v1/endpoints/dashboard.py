@@ -12,6 +12,7 @@ from stockflow.models.product import Product
 from stockflow.schemas.dashboard import DashboardSummaryResponse
 from stockflow.schemas.inventory import InventoryMovementResponse
 from stockflow.schemas.order import OrderResponse
+from stockflow.services.order_service import cleanup_expired_idempotency_keys
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 
@@ -83,3 +84,16 @@ async def get_dashboard_summary(
         recent_orders=[OrderResponse.model_validate(o) for o in orders],
         recent_movements=[InventoryMovementResponse.model_validate(m) for m in movements],
     )
+
+
+@router.post(
+    "/maintenance/cleanup-idempotency",
+    summary="Purge expired idempotency keys on demand (Administrator only)",
+)
+async def cleanup_idempotency_keys_endpoint(
+    session: DBSessionDep,
+    _admin_user: AdminUserDep,
+) -> dict[str, int]:
+    """Execute an on-demand cleanup of expired idempotency keys."""
+    purged = await cleanup_expired_idempotency_keys(session)
+    return {"purged_keys": purged}

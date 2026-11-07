@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { AuthProvider } from "./context/AuthContext";
+import React, { useEffect, useState } from "react";
+import { AuthProvider, useAuth } from "./context/AuthContext";
 import { Sidebar, NavTab } from "./components/Sidebar";
 import { Header } from "./components/Header";
 import { LoginModal } from "./components/LoginModal";
@@ -9,8 +9,16 @@ import { OrdersView } from "./views/OrdersView";
 import { InventoryView } from "./views/InventoryView";
 
 export const AppContent: React.FC = () => {
+  const { user, isAdmin } = useAuth();
   const [activeTab, setActiveTab] = useState<NavTab>("dashboard");
   const [showLoginModal, setShowLoginModal] = useState(false);
+
+  // If authenticated as customer, auto-navigate away from admin-only tabs
+  useEffect(() => {
+    if (user && !isAdmin && (activeTab === "dashboard" || activeTab === "inventory")) {
+      setActiveTab("products");
+    }
+  }, [user, isAdmin, activeTab]);
 
   return (
     <div className="flex h-screen bg-slate-950 overflow-hidden font-sans">

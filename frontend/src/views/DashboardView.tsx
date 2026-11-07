@@ -39,8 +39,12 @@ export const DashboardView: React.FC = () => {
   };
 
   useEffect(() => {
-    if (!authLoading) {
+    if (!authLoading && isAdmin) {
       fetchSummary();
+      const interval = setInterval(() => {
+        fetchSummary();
+      }, 30000);
+      return () => clearInterval(interval);
     }
   }, [authLoading, isAdmin]);
 
@@ -75,9 +79,9 @@ export const DashboardView: React.FC = () => {
       {/* Top Banner */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-bold text-white tracking-tight">Inventory Overview</h2>
+          <h2 className="text-2xl font-bold text-white tracking-tight">Inventory & Sales Dashboard</h2>
           <p className="text-sm text-slate-400 mt-1">
-            Real-time metrics computed directly from PostgreSQL relational engine
+            Consolidated metrics computed directly from PostgreSQL relational engine (periodic auto-refresh)
           </p>
         </div>
         <button

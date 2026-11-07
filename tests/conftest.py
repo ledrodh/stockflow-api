@@ -31,6 +31,17 @@ TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", DEFAULT_TEST_DB_URL)
 if "sqlite" in TEST_DATABASE_URL.lower():
     raise RuntimeError("SQLite is strictly prohibited for StockFlow API tests. Use PostgreSQL.")
 
+# Safety guard: Prevent accidental data loss against non-test databases
+_target_db_name = TEST_DATABASE_URL.rsplit("/", 1)[-1].split("?")[0].lower()
+if "test" not in _target_db_name:
+    raise RuntimeError(
+        f"SAFETY GUARD: Destructive test schema reset refused. Database name '{_target_db_name}' "
+        "must explicitly contain 'test' (e.g., 'stockflow_test_db')."
+    )
+
+if settings.APP_ENV == "production":
+    raise RuntimeError("SAFETY GUARD: Tests cannot be executed against production environment.")
+
 _SCHEMA_INITIALIZED = False
 
 

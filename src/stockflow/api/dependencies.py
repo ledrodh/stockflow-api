@@ -8,7 +8,11 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from stockflow.core.config import settings
-from stockflow.core.exceptions import AuthenticationError, PermissionDeniedError
+from stockflow.core.exceptions import (
+    AuthenticationError,
+    NotFoundError,
+    PermissionDeniedError,
+)
 from stockflow.core.security import decode_access_token
 from stockflow.db.session import get_db_session
 from stockflow.models.user import User, UserRole
@@ -38,7 +42,7 @@ async def get_current_user(
 
     try:
         user = await get_user_by_id(session, user_id)
-    except Exception as exc:
+    except NotFoundError as exc:
         raise AuthenticationError("Authenticated user no longer exists.") from exc
 
     if not user.is_active:
@@ -54,15 +58,22 @@ async def get_optional_current_user(
     session: DBSessionDep,
     token: Annotated[str | None, Depends(oauth2_scheme)],
 ) -> User | None:
-    """Resolve authenticated user if Bearer token is provided, otherwise return None."""
+    """Resolve authenticated user if Bearer token is valid and present, otherwise return None.
+
+    Database operational errors are never swallowed as missing authentication.
+    """
     if not token:
         return None
     try:
         payload = decode_access_token(token)
         user_id = UUID(str(payload["sub"]))
+    except (AuthenticationError, ValueError, KeyError):
+        return None
+
+    try:
         user = await get_user_by_id(session, user_id)
         return user if user.is_active else None
-    except Exception:
+    except NotFoundError:
         return None
 
 
