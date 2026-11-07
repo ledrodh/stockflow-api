@@ -65,18 +65,12 @@ async def get_dashboard_summary(
     total_revenue = Decimal(orders_res[1])
 
     # 5. Recent 5 orders
-    recent_orders_stmt = (
-        select(Order)
-        .order_by(Order.created_at.desc())
-        .limit(5)
-    )
+    recent_orders_stmt = select(Order).order_by(Order.created_at.desc()).limit(5)
     orders = (await session.execute(recent_orders_stmt)).scalars().all()
 
     # 6. Recent 5 inventory movements
     recent_movements_stmt = (
-        select(InventoryMovement)
-        .order_by(InventoryMovement.created_at.desc())
-        .limit(5)
+        select(InventoryMovement).order_by(InventoryMovement.created_at.desc()).limit(5)
     )
     movements = (await session.execute(recent_movements_stmt)).scalars().all()
 

@@ -57,7 +57,7 @@ async def test_multi_product_lifecycle_and_cart_purchase(
     cart_quantities = {
         "MONITOR-4K-32": 2,  # Subtotal: 2 * 3499.00 = 6998.00
         "KEYB-MECH-RGB": 3,  # Subtotal: 3 * 550.00  = 1650.00
-        "MOUSEPAD-XL": 5,    # Subtotal: 5 * 120.00  = 600.00
+        "MOUSEPAD-XL": 5,  # Subtotal: 5 * 120.00  = 600.00
         "HEADSET-71-PRO": 1,  # Subtotal: 1 * 890.00  = 890.00
     }
     # Expected total: 6998 + 1650 + 600 + 890 = 10138.00
@@ -102,13 +102,17 @@ async def test_multi_product_lifecycle_and_cart_purchase(
 
         # 4.2. Immutable append-only audit record created in inventory_movements
         movements = (
-            await db_session.execute(
-                select(InventoryMovement).where(
-                    InventoryMovement.product_id == prod_id,
-                    InventoryMovement.type == MovementType.OUT.value,
+            (
+                await db_session.execute(
+                    select(InventoryMovement).where(
+                        InventoryMovement.product_id == prod_id,
+                        InventoryMovement.type == MovementType.OUT.value,
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         assert len(movements) == 1
         mov = movements[0]
