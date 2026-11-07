@@ -1,18 +1,21 @@
 """Seed demo products and an initial admin account for interactive dashboard exploration."""
 
 import asyncio
+import os
+import sys
 from decimal import Decimal
 
 from sqlalchemy import select
 
+from stockflow.core.config import settings
 from stockflow.core.security import get_password_hash
 from stockflow.db.session import AsyncSessionLocal, engine
 from stockflow.models.inventory import InventoryMovement, MovementType
 from stockflow.models.product import Product
 from stockflow.models.user import User, UserRole
 
-DEFAULT_ADMIN_EMAIL = "admin@stockflow.io"
-DEFAULT_ADMIN_PASSWORD = "AdminPassword123!"
+DEFAULT_ADMIN_EMAIL = os.getenv("ADMIN_EMAIL", "admin@stockflow.io")
+DEFAULT_ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "AdminPassword123!")
 
 DEMO_PRODUCTS = [
     {
@@ -21,6 +24,7 @@ DEMO_PRODUCTS = [
         "description": "Space Black, 1TB SSD",
         "price": Decimal("24999.00"),
         "stock_quantity": 8,
+        "min_stock": 5,
     },
     {
         "sku": "DELL-ULTRA-34",
@@ -28,6 +32,7 @@ DEMO_PRODUCTS = [
         "description": "IPS Black, 90W USB-C Hub",
         "price": Decimal("4899.00"),
         "stock_quantity": 12,
+        "min_stock": 5,
     },
     {
         "sku": "KEYB-LOGI-MX",
@@ -35,13 +40,15 @@ DEMO_PRODUCTS = [
         "description": "Tactile Quiet switches, Bluetooth & Bolt",
         "price": Decimal("799.00"),
         "stock_quantity": 25,
+        "min_stock": 10,
     },
     {
         "sku": "MOUSE-MX-MASTER",
         "name": "Logitech MX Master 3S Mouse",
         "description": "Quiet 8K DPI optical sensor",
         "price": Decimal("599.00"),
-        "stock_quantity": 3,  # Critical stock (< 5) to display the warning card
+        "stock_quantity": 3,  # Critical stock (< min_stock 5) to display the warning card
+        "min_stock": 5,
     },
     {
         "sku": "SSD-SAMSUNG-990",
@@ -49,12 +56,22 @@ DEMO_PRODUCTS = [
         "description": "PCIe 4.0 up to 7450 MB/s",
         "price": Decimal("1299.00"),
         "stock_quantity": 15,
+        "min_stock": 5,
     },
 ]
 
 
 async def seed_demo_data() -> None:
     """Populate database with default admin user and demo catalog products with ledger entries."""
+    if settings.APP_ENV == "production" and not settings.ENABLE_DEMO_SEED:
+        print(
+            "[ERROR] Seeding demo data is blocked in production mode. "
+            "Set ENABLE_DEMO_SEED=true and supply explicit ADMIN_EMAIL / ADMIN_PASSWORD "
+            "environment variables to proceed.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     async with AsyncSessionLocal() as session:
         # 1. Admin User
         admin_stmt = select(User).where(User.email == DEFAULT_ADMIN_EMAIL)
@@ -71,20 +88,21 @@ async def seed_demo_data() -> None:
             await session.flush()
             print(f"[OK] Admin created: {DEFAULT_ADMIN_EMAIL}")
 
-        # 2. Customer User
-        customer_stmt = select(User).where(User.email == "customer@stockflow.io")
-        customer = (await session.execute(customer_stmt)).scalar_one_or_none()
-        if customer is None:
-            customer = User(
-                email="customer@stockflow.io",
-                hashed_password=get_password_hash("CustomerSecret#2026"),
-                full_name="Demo Customer",
-                role=UserRole.CUSTOMER.value,
-                is_active=True,
-            )
-            session.add(customer)
-            await session.flush()
-            print("[OK] Demo customer created: customer@stockflow.io")
+        # 2. Customer User (non-production only)
+        if settings.APP_ENV != "production":
+            customer_stmt = select(User).where(User.email == "customer@stockflow.io")
+            customer = (await session.execute(customer_stmt)).scalar_one_or_none()
+            if customer is None:
+                customer = User(
+                    email="customer@stockflow.io",
+                    hashed_password=get_password_hash("CustomerSecret#2026"),
+                    full_name="Demo Customer",
+                    role=UserRole.CUSTOMER.value,
+                    is_active=True,
+                )
+                session.add(customer)
+                await session.flush()
+                print("[OK] Demo customer created: customer@stockflow.io")
 
         # 3. Products + Initial Ledger Movements
         for item in DEMO_PRODUCTS:
@@ -97,6 +115,7 @@ async def seed_demo_data() -> None:
                     description=item["description"],
                     price=item["price"],
                     stock_quantity=item["stock_quantity"],
+                    min_stock=item["min_stock"],
                     is_active=True,
                 )
                 session.add(new_prod)

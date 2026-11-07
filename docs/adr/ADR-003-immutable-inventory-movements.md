@@ -1,4 +1,4 @@
-# ADR-003: Immutable Double-Entry Ledger (`InventoryMovement`) and Historical Snapshots
+# ADR-003: Append-Only Immutable Inventory Ledger (`InventoryMovement`) and Historical Snapshots
 
 - **Status:** Accepted
 - **Date:** 2026-11-06

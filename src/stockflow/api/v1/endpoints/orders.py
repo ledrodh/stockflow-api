@@ -10,6 +10,7 @@ from stockflow.models.user import UserRole
 from stockflow.schemas.common import PaginatedResponse
 from stockflow.schemas.order import OrderCreate, OrderResponse
 from stockflow.services.order_service import (
+    cancel_order_atomic,
     create_order_atomic,
     get_order_by_id,
     list_orders,
@@ -88,3 +89,23 @@ async def get_order_endpoint(
         is_admin=is_admin,
     )
     return OrderResponse.model_validate(order)
+
+
+@router.post(
+    "/{order_id}/cancel",
+    response_model=OrderResponse,
+    summary="Cancel order atomically and restore inventory",
+)
+async def cancel_order_endpoint(
+    order_id: UUID,
+    session: DBSessionDep,
+    current_user: CurrentUserDep,
+) -> OrderResponse:
+    """Cancel a CONFIRMED order, restock items with locks, and append audit movements."""
+    is_admin = current_user.role == UserRole.ADMIN.value
+    return await cancel_order_atomic(
+        session=session,
+        order_id=order_id,
+        user_id=current_user.id,
+        is_admin=is_admin,
+    )

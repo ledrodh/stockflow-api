@@ -9,16 +9,23 @@ import {
   ArrowDownRight,
   RefreshCw,
   Loader2,
+  ShieldAlert,
 } from "lucide-react";
 import { api } from "../services/api";
 import { DashboardSummary } from "../types/api";
+import { useAuth } from "../context/AuthContext";
 
 export const DashboardView: React.FC = () => {
+  const { user, isAdmin, loading: authLoading } = useAuth();
   const [data, setData] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const fetchSummary = async () => {
+    if (!isAdmin) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -32,14 +39,33 @@ export const DashboardView: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchSummary();
-  }, []);
+    if (!authLoading) {
+      fetchSummary();
+    }
+  }, [authLoading, isAdmin]);
 
-  if (loading && !data) {
+  if (authLoading || (loading && !data && isAdmin)) {
     return (
       <div className="flex flex-col items-center justify-center h-96 space-y-3">
         <Loader2 className="w-8 h-8 text-brand-500 animate-spin" />
         <p className="text-sm text-slate-400">Querying aggregated metrics in PostgreSQL...</p>
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <div className="max-w-2xl mx-auto mt-12 p-8 bg-slate-900 border border-slate-800 rounded-3xl text-center space-y-4 shadow-xl">
+        <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400">
+          <ShieldAlert className="w-7 h-7" />
+        </div>
+        <h3 className="text-xl font-bold text-white">Administrator Access Required</h3>
+        <p className="text-sm text-slate-400 leading-relaxed">
+          Aggregated executive metrics, real-time inventory ledger feeds, and financial revenue summaries are strictly restricted to system administrators (Role: <code>admin</code>).
+        </p>
+        <p className="text-xs text-slate-400">
+          Logged in as: <span className="font-semibold text-slate-300">{user?.email || "Anonymous"}</span> (Role: <span className="font-mono text-brand-400">{user?.role || "none"}</span>)
+        </p>
       </div>
     );
   }
@@ -105,7 +131,7 @@ export const DashboardView: React.FC = () => {
             </div>
           </div>
           <p className="text-2xl font-bold text-amber-400 mt-3">{data?.low_stock_products ?? 0}</p>
-          <p className="text-[11px] text-slate-400 mt-1">Products with stock &lt; 5</p>
+          <p className="text-[11px] text-slate-400 mt-1">Below minimum threshold</p>
         </div>
 
         {/* Total Orders */}

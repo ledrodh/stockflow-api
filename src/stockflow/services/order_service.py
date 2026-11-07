@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,7 @@ from stockflow.core.exceptions import (
     IdempotencyConflictError,
     InsufficientStockError,
     NotFoundError,
+    PermissionDeniedError,
 )
 from stockflow.models.idempotency import IdempotencyKey, IdempotencyStatus
 from stockflow.models.inventory import InventoryMovement, MovementType
@@ -35,19 +36,35 @@ def compute_order_request_hash(payload: OrderCreate) -> str:
     return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
+async def cleanup_expired_idempotency_keys(session: AsyncSession) -> int:
+    """Purge expired idempotency keys from PostgreSQL to prevent storage bloat."""
+    now = datetime.now(UTC)
+    stmt = delete(IdempotencyKey).where(IdempotencyKey.expires_at <= now)
+    result = await session.execute(stmt)
+    await session.commit()
+    return int(result.rowcount)  # type: ignore[attr-defined]
+
+
 async def _evaluate_existing_idempotency(
     session: AsyncSession,
     user_id: UUID,
     idempotency_key: str,
     request_hash: str,
 ) -> OrderResponse | None:
-    """Check if an idempotency record already exists and validate its payload hash."""
+    """Check if an idempotency record exists, validates its TTL and request payload hash."""
     stmt = select(IdempotencyKey).where(
         IdempotencyKey.user_id == user_id,
         IdempotencyKey.key == idempotency_key,
     )
     existing = (await session.execute(stmt)).scalar_one_or_none()
     if existing is None:
+        return None
+
+    # Enforce TTL: If the idempotency key has expired, purge it and treat as a new request
+    now = datetime.now(UTC)
+    if existing.expires_at <= now:
+        await session.delete(existing)
+        await session.flush()
         return None
 
     if existing.request_hash != request_hash:
@@ -232,9 +249,17 @@ async def create_order_atomic(
             return order_response
 
     except IntegrityError as exc:
-        # Handle race condition when two identical Idempotency-Keys arrive simultaneously
         if session.in_transaction():
             await session.rollback()
+
+        # Differentiate idempotency constraint violations from foreign keys or check constraints
+        error_text = str(exc).lower()
+        is_idempotency_violation = (
+            "uq_idempotency_user_key" in error_text or "idempotency_keys" in error_text
+        )
+        if not is_idempotency_violation:
+            raise
+
         cached_after_race = await _evaluate_existing_idempotency(
             session, user_id, clean_key, request_hash
         )
@@ -244,6 +269,81 @@ async def create_order_atomic(
             "Concurrent request with the same Idempotency-Key detected.",
             details={"idempotency_key": clean_key},
         ) from exc
+
+
+async def cancel_order_atomic(
+    session: AsyncSession,
+    order_id: UUID,
+    user_id: UUID,
+    *,
+    is_admin: bool = False,
+) -> OrderResponse:
+    """Atomically cancel a confirmed order, releasing stock and logging immutable RETURN movements.
+
+    Guarantees:
+    - Idempotent: Calling cancel on an already CANCELLED order returns current state.
+    - Deadlock-free: Locks products in ascending Product.id order.
+    """
+    if session.in_transaction():
+        await session.rollback()
+
+    async with session.begin():
+        await session.execute(text(f"SET LOCAL lock_timeout = '{settings.DB_LOCK_TIMEOUT_MS}ms'"))
+
+        stmt = select(Order).where(Order.id == order_id).with_for_update()
+        order = (await session.execute(stmt)).scalar_one_or_none()
+        if order is None:
+            raise NotFoundError(
+                f"Order '{order_id}' not found.",
+                details={"order_id": str(order_id)},
+            )
+
+        if not is_admin and order.user_id != user_id:
+            raise PermissionDeniedError("You do not have permission to cancel this order.")
+
+        # Idempotent check: if already cancelled, return existing state without duplicate restock
+        if order.status == OrderStatus.CANCELLED.value:
+            return OrderResponse.model_validate(order)
+
+        if order.status != OrderStatus.CONFIRMED.value:
+            raise ConflictError(
+                f"Cannot cancel order in status '{order.status}'.",
+                details={"status": order.status},
+            )
+
+        # Sort products and lock them deterministically
+        product_ids = sorted([item.product_id for item in order.items])
+        prod_stmt = (
+            select(Product)
+            .where(Product.id.in_(product_ids))
+            .order_by(Product.id.asc())
+            .with_for_update()
+        )
+        locked_products = (await session.execute(prod_stmt)).scalars().all()
+        products_by_id = {prod.id: prod for prod in locked_products}
+
+        # Restock products and append immutable RETURN audit movements
+        for item in order.items:
+            product = products_by_id[item.product_id]
+            previous_stock = product.stock_quantity
+            new_stock = previous_stock + item.quantity
+            product.stock_quantity = new_stock
+
+            movement = InventoryMovement(
+                product_id=product.id,
+                type=MovementType.RETURN.value,
+                quantity=item.quantity,
+                previous_stock=previous_stock,
+                new_stock=new_stock,
+                reference_id=str(order.id),
+                reason=f"Restock from cancelled order {order.id}",
+                created_by=user_id,
+            )
+            session.add(movement)
+
+        order.status = OrderStatus.CANCELLED.value
+        await session.flush()
+        return OrderResponse.model_validate(order)
 
 
 async def get_order_by_id(

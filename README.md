@@ -9,7 +9,7 @@
 ![React](https://img.shields.io/badge/Frontend-React_18_%2B_Vite-61dafb)
 ![Tailwind](https://img.shields.io/badge/Styling-Tailwind_CSS-38bdf8)
 
-**StockFlow API** is a high-integrity inventory and order management engine engineered to **guarantee absolute data consistency under heavy stress and real-world database contention**. Moving beyond simple CRUD patterns, StockFlow implements ACID atomic transactions, pessimistic concurrency control with deadlock prevention (`SELECT ... FOR UPDATE`), database-backed persistent idempotency, and an immutable double-entry inventory ledger (*Append-Only Ledger*).
+**StockFlow API** is a high-integrity inventory and order management engine engineered to **guarantee absolute data consistency under heavy stress and real-world database contention**. Moving beyond simple CRUD patterns, StockFlow implements ACID atomic transactions, pessimistic concurrency control with deadlock prevention (`SELECT ... FOR UPDATE`), database-backed persistent idempotency, and an Append-Only Immutable Inventory Ledger.
 
 ---
 
@@ -17,7 +17,7 @@
 
 1. **Database-Level Concurrency Control (`SELECT ... FOR UPDATE`):**
    - High-contention purchase requests competing for the remaining units of a product are serialized at the PostgreSQL row level.
-   - Products within multi-item orders are sorted deterministically by primary key (`ORDER BY products.id ASC`) prior to lock acquisition, **mathematically eliminating circular deadlocks** caused by concurrent carts locking items in opposite orders.
+   - Products within multi-item orders are sorted deterministically by primary key (`ORDER BY products.id ASC`) prior to lock acquisition, eliminating circular deadlocks caused by concurrent carts acquiring locks in conflicting orders.
 2. **Transactional PostgreSQL Idempotency (`UNIQUE(user_id, key)`):**
    - The `Idempotency-Key` is persisted and validated within the **exact same ACID transaction** that deducts stock and creates orders, avoiding the *Dual-Write Problem* common to Redis-only architectures.
    - Deterministic `SHA-256` payload hashing: repeating the same key returns the existing order (`201 Created`) without secondary debits; altering the payload while reusing the key triggers an immediate `409 Conflict` (`IDEMPOTENCY_CONFLICT`).
@@ -174,7 +174,7 @@ Core architectural choices are documented in [`docs/adr`](docs/adr):
 
 - [**ADR-001: PostgreSQL as Single Source of Truth for Transactional Idempotency**](docs/adr/ADR-001-postgresql-idempotency.md)
 - [**ADR-002: Pessimistic Concurrency Control with `SELECT FOR UPDATE` and Deterministic Ordering**](docs/adr/ADR-002-select-for-update-concurrency.md)
-- [**ADR-003: Immutable Double-Entry Ledger (`InventoryMovement`) and Historical Snapshots**](docs/adr/ADR-003-immutable-inventory-movements.md)
+- [**ADR-003: Append-Only Immutable Inventory Ledger (`InventoryMovement`) and Historical Snapshots**](docs/adr/ADR-003-immutable-inventory-movements.md)
 
 ---
 
@@ -182,9 +182,9 @@ Core architectural choices are documented in [`docs/adr`](docs/adr):
 
 StockFlow includes a responsive **Single Page Application (SPA)** in [`frontend/`](frontend) built with **React, TypeScript, Vite, and Tailwind CSS**:
 
-- **Real-Time KPIs:** Live overview metrics (Active SKUs, Physical Stock Units, Low Stock Alert `< 5`, Confirmed Orders, and Total Revenue).
+- **Real-Time KPIs:** Live overview metrics (Active SKUs, Physical Stock Units, Low Stock Alert below configurable `min_stock`, Confirmed Orders, and Total Revenue).
 - **Product Catalog Management:** Dynamic search by name or SKU, server pagination, and soft deletion.
-- **Sales Terminal & Idempotency Testing:** Multi-item cart builder with customizable `Idempotency-Key` headers. Allows visual validation of duplicate prevention and `409 Conflict` scenarios.
+- **Sales Terminal & Idempotency Testing:** Multi-item cart builder with customizable `Idempotency-Key` headers, instant order cancellation with automatic inventory restock, and visual validation of duplicate prevention.
 - **Immutable Audit Ledger:** Visual feed of stock modifications (`IN`, `OUT`, `ADJUSTMENT`, `RETURN`) backed by PostgreSQL's append-only trigger.
 - **Quick Demo Login:** One-click shortcuts to authenticate as **Administrator** or **Customer**.
 

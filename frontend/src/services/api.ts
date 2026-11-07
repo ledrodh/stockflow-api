@@ -11,7 +11,7 @@ import {
   User,
 } from "../types/api";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api/v1";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "/api/v1";
 
 class ApiClient {
   private token: string | null = null;
@@ -126,6 +126,12 @@ class ApiClient {
 
   async getOrders(limit = 20, offset = 0): Promise<PaginatedResponse<Order>> {
     return this.request<PaginatedResponse<Order>>(`/orders?limit=${limit}&offset=${offset}`);
+  }
+
+  async cancelOrder(orderId: string): Promise<Order> {
+    return this.request<Order>(`/orders/${orderId}/cancel`, {
+      method: "POST",
+    });
   }
 
   // --- Inventory Movements ---

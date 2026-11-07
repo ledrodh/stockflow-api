@@ -1,6 +1,7 @@
 """Alembic migration environment configured for SQLAlchemy 2.0 AsyncEngine."""
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -17,7 +18,11 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", settings.async_database_url)
+override_url = os.getenv("ALEMBIC_DATABASE_URL") or config.get_main_option("sqlalchemy.url")
+if override_url:
+    config.set_main_option("sqlalchemy.url", override_url)
+else:
+    config.set_main_option("sqlalchemy.url", settings.async_database_url)
 
 target_metadata = Base.metadata
 

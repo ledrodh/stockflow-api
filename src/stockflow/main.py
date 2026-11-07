@@ -29,29 +29,28 @@ def create_app() -> FastAPI:
         description=(
             "High-integrity inventory and order management engine with atomic transactions, "
             "database-level concurrency control (SELECT FOR UPDATE), PostgreSQL idempotency, "
-            "and an immutable inventory movement ledger."
+            "and an append-only inventory movement ledger."
         ),
         lifespan=lifespan,
         docs_url="/docs",
         redoc_url="/redoc",
     )
 
+    # Restrictive CORS configuration
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=settings.CORS_ORIGINS,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
     )
 
     register_exception_handlers(app)
 
-    # Root-level /health endpoint as specified in Sprint 1
+    # Root health check endpoint
     app.include_router(health.router)
-    # Versioned /api/v1 endpoints
+    # Strictly versioned /api/v1 endpoints
     app.include_router(v1_router, prefix=settings.API_V1_PREFIX)
-    # Unprefixed fallback routes (hidden from OpenAPI docs to avoid duplication)
-    app.include_router(v1_router, include_in_schema=False)
 
     return app
 

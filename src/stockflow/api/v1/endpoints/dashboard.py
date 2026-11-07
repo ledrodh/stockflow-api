@@ -5,7 +5,7 @@ from decimal import Decimal
 from fastapi import APIRouter
 from sqlalchemy import func, select
 
-from stockflow.api.dependencies import DBSessionDep, OptionalCurrentUserDep
+from stockflow.api.dependencies import AdminUserDep, DBSessionDep
 from stockflow.models.inventory import InventoryMovement
 from stockflow.models.order import Order, OrderStatus
 from stockflow.models.product import Product
@@ -19,11 +19,11 @@ router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 @router.get(
     "/summary",
     response_model=DashboardSummaryResponse,
-    summary="Get aggregated inventory and sales metrics for dashboard overview",
+    summary="Get aggregated inventory and sales metrics (Administrator only)",
 )
 async def get_dashboard_summary(
     session: DBSessionDep,
-    _current_user: OptionalCurrentUserDep,
+    _admin_user: AdminUserDep,
 ) -> DashboardSummaryResponse:
     """Calculate inventory KPIs, order counts, revenue, and fetch recent activity."""
     # 1. Total products (active)
@@ -43,12 +43,12 @@ async def get_dashboard_summary(
     ).scalar_one()
     total_stock_items = int(total_stock_res)
 
-    # 3. Low stock products (< 5 units)
+    # 3. Low stock products (evaluated dynamically against product min_stock)
     low_stock_products = (
         await session.execute(
             select(func.count())
             .select_from(Product)
-            .where(Product.is_active.is_(True), Product.stock_quantity < 5)
+            .where(Product.is_active.is_(True), Product.stock_quantity < Product.min_stock)
         )
     ).scalar_one()
 

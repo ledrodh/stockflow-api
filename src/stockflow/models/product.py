@@ -15,6 +15,7 @@ class Product(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (
         CheckConstraint("price >= 0", name="price_non_negative"),
         CheckConstraint("stock_quantity >= 0", name="stock_quantity_non_negative"),
+        CheckConstraint("min_stock >= 0", name="min_stock_non_negative"),
     )
 
     sku: Mapped[str] = mapped_column(
@@ -40,6 +41,12 @@ class Product(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Integer,
         default=0,
         server_default="0",
+        nullable=False,
+    )
+    min_stock: Mapped[int] = mapped_column(
+        Integer,
+        default=5,
+        server_default="5",
         nullable=False,
     )
     is_active: Mapped[bool] = mapped_column(

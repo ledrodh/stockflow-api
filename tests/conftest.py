@@ -1,9 +1,12 @@
 """Pytest fixtures configured strictly against a real PostgreSQL instance (SQLite is forbidden)."""
 
+import asyncio
 import os
 from collections.abc import AsyncGenerator
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
@@ -15,7 +18,6 @@ from sqlalchemy.ext.asyncio import (
 
 from stockflow.core.config import settings
 from stockflow.core.security import create_access_token, get_password_hash
-from stockflow.db.base import Base
 from stockflow.db.session import get_db_session
 from stockflow.main import app
 from stockflow.models.user import User, UserRole
@@ -32,39 +34,25 @@ if "sqlite" in TEST_DATABASE_URL.lower():
 _SCHEMA_INITIALIZED = False
 
 
+def _run_alembic_migrations(db_url: str) -> None:
+    """Run real Alembic migrations to head in a background worker thread."""
+    os.environ["ALEMBIC_DATABASE_URL"] = db_url
+    alembic_cfg = Config("alembic.ini")
+    alembic_cfg.set_main_option("sqlalchemy.url", db_url)
+    command.upgrade(alembic_cfg, "head")
+
+
 async def _ensure_schema_initialized(engine: AsyncEngine) -> None:
-    """Initialize PostgreSQL tables and triggers once per test session."""
+    """Initialize PostgreSQL tables strictly through real Alembic migrations."""
     global _SCHEMA_INITIALIZED
     if _SCHEMA_INITIALIZED:
         return
 
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
-        await conn.execute(
-            text(
-                """
-                CREATE OR REPLACE FUNCTION prevent_inventory_movement_mutation()
-                RETURNS TRIGGER AS $$
-                BEGIN
-                    RAISE EXCEPTION 'inventory_movements table is append-only and immutable.';
-                END;
-                $$ LANGUAGE plpgsql;
-                """
-            )
-        )
-        await conn.execute(
-            text("DROP TRIGGER IF EXISTS trg_immutable_inventory_movements ON inventory_movements;")
-        )
-        await conn.execute(
-            text(
-                """
-                CREATE TRIGGER trg_immutable_inventory_movements
-                BEFORE UPDATE OR DELETE ON inventory_movements
-                FOR EACH ROW EXECUTE FUNCTION prevent_inventory_movement_mutation();
-                """
-            )
-        )
+        await conn.execute(text("DROP SCHEMA IF EXISTS public CASCADE"))
+        await conn.execute(text("CREATE SCHEMA public"))
+
+    await asyncio.to_thread(_run_alembic_migrations, TEST_DATABASE_URL)
     _SCHEMA_INITIALIZED = True
 
 

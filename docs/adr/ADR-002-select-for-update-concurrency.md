@@ -34,7 +34,7 @@ products_stmt = (
     .with_for_update()
 )
 ```
-Regardless of the item sequence sent by the client, every concurrent transaction requests row locks in the exact same ascending `UUID` sequence, mathematically eliminating circular deadlocks due to out-of-order locking.
+Regardless of the item sequence sent by the client, every concurrent transaction requests row locks in the exact same ascending `UUID` sequence, eliminating the primary cause of deadlocks resulting from inverted row acquisition order across concurrent transactions.
 
 ### 2. Transaction Lock Timeout (`SET LOCAL lock_timeout`)
 We configure `SET LOCAL lock_timeout = '5000ms'` within the transaction. If row acquisition exceeds acceptable thresholds, the transaction fails fast rather than exhausting the database connection pool.
@@ -48,5 +48,5 @@ Beyond application-level validations, the `products` table defines a native chec
 
 ### Positive
 - **Provably Zero Overselling:** Verified by automated stress tests (`tests/integration/test_concurrency.py`), where 10 concurrent requests (`asyncio.gather`) compete for 5 items — exactly 5 succeed with `201 Created`, 5 fail with `409 Conflict`, and the final stock settles exactly at `0`.
-- **Deadlock Immunity on Multi-Item Carts:** Deterministic ordering prevents cyclical waiting conditions.
+- **Deadlock Mitigation on Multi-Item Carts:** Deterministic primary-key ordering eliminates lock inversion deadlocks on product rows.
 - **Superior User Experience Compared to Optimistic Locking:** Unlike optimistic locking (which aborts competing transactions forcing customers to retry checkouts even when inventory remains), `SELECT FOR UPDATE` queues transactions in microseconds while inventory is available.

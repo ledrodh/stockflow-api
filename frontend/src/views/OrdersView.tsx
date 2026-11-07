@@ -30,6 +30,7 @@ export const OrdersView: React.FC = () => {
 
   // Feedback states
   const [submitting, setSubmitting] = useState(false);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [successOrder, setSuccessOrder] = useState<Order | null>(null);
   const [errorFeedback, setErrorFeedback] = useState<{ status?: number; message: string } | null>(
     null
@@ -104,6 +105,8 @@ export const OrdersView: React.FC = () => {
     try {
       const order = await api.createOrder(payload, idempotencyKey);
       setSuccessOrder(order);
+      setCart([]);
+      generateNewIdempotencyKey();
       fetchData();
     } catch (err: any) {
       setErrorFeedback({
@@ -112,6 +115,22 @@ export const OrdersView: React.FC = () => {
       });
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleCancelOrder = async (orderId: string) => {
+    setCancellingId(orderId);
+    setErrorFeedback(null);
+    try {
+      await api.cancelOrder(orderId);
+      await fetchData();
+    } catch (err: any) {
+      setErrorFeedback({
+        status: err?.status,
+        message: err?.message || "Failed to cancel order.",
+      });
+    } finally {
+      setCancellingId(null);
     }
   };
 
@@ -258,7 +277,13 @@ export const OrdersView: React.FC = () => {
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="font-mono font-semibold text-brand-400">#{o.id}</span>
-                        <span className="px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 text-[10px] font-medium border border-emerald-500/20">
+                        <span
+                          className={`px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+                            o.status === "CONFIRMED"
+                              ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/20"
+                              : "bg-rose-500/15 text-rose-400 border-rose-500/20"
+                          }`}
+                        >
                           {o.status}
                         </span>
                       </div>
@@ -266,10 +291,21 @@ export const OrdersView: React.FC = () => {
                         {new Date(o.created_at).toLocaleString("en-US")} • {o.items.length} items (Frozen snapshots)
                       </div>
                     </div>
-                    <div className="text-right">
-                      <span className="text-sm font-bold font-mono text-white">
-                        ${Number(o.total_amount).toFixed(2)}
-                      </span>
+                    <div className="flex items-center gap-4">
+                      <div className="text-right">
+                        <span className="text-sm font-bold font-mono text-white">
+                          ${Number(o.total_amount).toFixed(2)}
+                        </span>
+                      </div>
+                      {o.status === "CONFIRMED" && (
+                        <button
+                          onClick={() => handleCancelOrder(o.id)}
+                          disabled={cancellingId === o.id}
+                          className="px-2.5 py-1 bg-rose-950/60 hover:bg-rose-900/60 border border-rose-500/30 text-rose-300 hover:text-white rounded-lg text-[11px] font-semibold transition-colors disabled:opacity-50"
+                        >
+                          {cancellingId === o.id ? "Restocking..." : "Cancel Order"}
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))

@@ -1,5 +1,6 @@
 """Integration tests for atomic Order processing, PostgreSQL Idempotency, and Immutable Ledger."""
 
+import asyncio
 from uuid import uuid4
 
 import pytest
@@ -208,3 +209,162 @@ async def test_admin_inventory_movements_and_immutability(
             {"id": mov_data["id"]},
         )
     await db_session.rollback()
+
+
+async def test_concurrent_same_idempotency_key_race_condition(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    customer_headers: dict[str, str],
+) -> None:
+    """Two concurrent requests with the identical idempotency key and payload yield one order."""
+    prod = (
+        await client.post(
+            "/api/v1/products",
+            headers=admin_headers,
+            json={
+                "sku": "KEYBOARD-RACE",
+                "name": "Mechanical Keyboard",
+                "price": "450.00",
+                "stock_quantity": 10,
+            },
+        )
+    ).json()
+    product_id = prod["id"]
+
+    same_key = f"race-idem-{uuid4()}"
+    payload = {"items": [{"product_id": product_id, "quantity": 2}]}
+
+    req1 = client.post(
+        "/api/v1/orders",
+        headers={**customer_headers, "Idempotency-Key": same_key},
+        json=payload,
+    )
+    req2 = client.post(
+        "/api/v1/orders",
+        headers={**customer_headers, "Idempotency-Key": same_key},
+        json=payload,
+    )
+
+    resp1, resp2 = await asyncio.gather(req1, req2)
+    assert resp1.status_code == 201
+    assert resp2.status_code == 201
+    assert resp1.json()["id"] == resp2.json()["id"]
+
+    # Stock should be 8, not 6
+    check_prod = await client.get(f"/api/v1/products/{product_id}", headers=customer_headers)
+    assert check_prod.json()["stock_quantity"] == 8
+
+
+async def test_order_cancellation_and_inventory_restoration(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    customer_headers: dict[str, str],
+) -> None:
+    """Cancelling an order restores product stock, creates a RETURN movement, and is idempotent."""
+    prod = (
+        await client.post(
+            "/api/v1/products",
+            headers=admin_headers,
+            json={
+                "sku": "HEADSET-CANCEL",
+                "name": "Wireless Headset",
+                "price": "600.00",
+                "stock_quantity": 10,
+            },
+        )
+    ).json()
+    product_id = prod["id"]
+
+    order_resp = await client.post(
+        "/api/v1/orders",
+        headers={**customer_headers, "Idempotency-Key": f"cancel-test-{uuid4()}"},
+        json={"items": [{"product_id": product_id, "quantity": 4}]},
+    )
+    assert order_resp.status_code == 201
+    order_id = order_resp.json()["id"]
+
+    # Stock before cancel is 6
+    prod_mid = await client.get(f"/api/v1/products/{product_id}", headers=customer_headers)
+    assert prod_mid.json()["stock_quantity"] == 6
+
+    # Cancel the order
+    cancel_resp = await client.post(
+        f"/api/v1/orders/{order_id}/cancel",
+        headers=customer_headers,
+    )
+    assert cancel_resp.status_code == 200
+    cancel_data = cancel_resp.json()
+    assert cancel_data["status"] == "CANCELLED"
+
+    # Stock must be restored back to 10
+    prod_restored = await client.get(f"/api/v1/products/{product_id}", headers=customer_headers)
+    assert prod_restored.json()["stock_quantity"] == 10
+
+    # Repeating the cancel request is idempotent: status remains CANCELLED without double-restocking
+    repeat_cancel = await client.post(
+        f"/api/v1/orders/{order_id}/cancel",
+        headers=customer_headers,
+    )
+    assert repeat_cancel.status_code == 200
+    assert repeat_cancel.json()["status"] == "CANCELLED"
+
+    prod_still_10 = await client.get(f"/api/v1/products/{product_id}", headers=customer_headers)
+    assert prod_still_10.json()["stock_quantity"] == 10
+
+    # Verify inventory audit trail has a RETURN movement
+    movements_resp = await client.get(
+        f"/api/v1/inventory/movements?product_id={product_id}",
+        headers=admin_headers,
+    )
+    assert movements_resp.status_code == 200
+    movements = movements_resp.json()["items"]
+    types = [m["type"] for m in movements]
+    assert "RETURN" in types
+
+
+async def test_idempotency_ttl_expiration_allows_new_order(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    customer_headers: dict[str, str],
+    db_session: AsyncSession,
+) -> None:
+    """When an idempotency key expires past its TTL, the key can be reused for a new order."""
+    prod = (
+        await client.post(
+            "/api/v1/products",
+            headers=admin_headers,
+            json={
+                "sku": "MOUSE-TTL",
+                "name": "Gaming Mouse",
+                "price": "150.00",
+                "stock_quantity": 20,
+            },
+        )
+    ).json()
+    product_id = prod["id"]
+
+    idem_key = f"ttl-key-{uuid4()}"
+    first_resp = await client.post(
+        "/api/v1/orders",
+        headers={**customer_headers, "Idempotency-Key": idem_key},
+        json={"items": [{"product_id": product_id, "quantity": 1}]},
+    )
+    assert first_resp.status_code == 201
+    first_order_id = first_resp.json()["id"]
+
+    # Manually expire the key in the database
+    expire_sql = (
+        "UPDATE idempotency_keys SET expires_at = now() - INTERVAL '5 minutes' WHERE key = :key"
+    )
+    await db_session.execute(text(expire_sql), {"key": idem_key})
+    await db_session.commit()
+
+    # Expired key allows submitting a brand new order with different payload
+    second_resp = await client.post(
+        "/api/v1/orders",
+        headers={**customer_headers, "Idempotency-Key": idem_key},
+        json={"items": [{"product_id": product_id, "quantity": 2}]},
+    )
+    assert second_resp.status_code == 201
+    second_order_id = second_resp.json()["id"]
+    assert second_order_id != first_order_id

@@ -45,8 +45,8 @@ async def test_get_dashboard_summary_metrics(
         },
     )
 
-    # 3. Query dashboard summary
-    summary_resp = await client.get("/api/v1/dashboard/summary", headers=customer_headers)
+    # 3. Query dashboard summary as admin
+    summary_resp = await client.get("/api/v1/dashboard/summary", headers=admin_headers)
     assert summary_resp.status_code == 200
     data = summary_resp.json()
 
@@ -58,3 +58,17 @@ async def test_get_dashboard_summary_metrics(
     assert data["total_revenue"] == "300.00"
     assert len(data["recent_orders"]) == 1
     assert len(data["recent_movements"]) >= 3  # Initial stock movements + purchase OUT
+
+
+async def test_dashboard_summary_requires_admin(
+    client: AsyncClient,
+    customer_headers: dict[str, str],
+) -> None:
+    """Ensure dashboard summary rejects unauthenticated and non-admin requests."""
+    # Unauthenticated -> 401
+    unauth_resp = await client.get("/api/v1/dashboard/summary")
+    assert unauth_resp.status_code == 401
+
+    # Customer role -> 403
+    forbidden_resp = await client.get("/api/v1/dashboard/summary", headers=customer_headers)
+    assert forbidden_resp.status_code == 403

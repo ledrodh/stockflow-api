@@ -33,6 +33,7 @@ async def create_product(
         description=payload.description,
         price=payload.price,
         stock_quantity=payload.stock_quantity,
+        min_stock=payload.min_stock,
         is_active=True,
     )
     session.add(product)
