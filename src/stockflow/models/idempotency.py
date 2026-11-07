@@ -9,6 +9,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -39,6 +40,7 @@ class IdempotencyKey(UUIDPrimaryKeyMixin, Base):
             "status IN ('PROCESSING', 'COMPLETED', 'FAILED')",
             name="valid_idempotency_status",
         ),
+        Index("ix_idempotency_keys_expires_at", "expires_at"),
     )
 
     user_id: Mapped[UUID] = mapped_column(

@@ -8,10 +8,18 @@ import {
   X,
   AlertCircle,
   ShieldAlert,
+  CheckCircle2,
+  FileCheck2,
 } from "lucide-react";
 import { api } from "../services/api";
 import { useAuth } from "../context/AuthContext";
-import { InventoryMovement, MovementType, Product } from "../types/api";
+import {
+  AdjustmentDirection,
+  InventoryMovement,
+  MovementType,
+  Product,
+  StockReconciliationReport,
+} from "../types/api";
 
 export const InventoryView: React.FC = () => {
   const { user, isAdmin, loading: authLoading } = useAuth();
@@ -29,11 +37,17 @@ export const InventoryView: React.FC = () => {
   const [targetProductId, setTargetProductId] = useState("");
   const [movementType, setMovementType] = useState<MovementType>("IN");
   const [quantity, setQuantity] = useState("5");
-  const [isDeduction, setIsDeduction] = useState(false);
+  const [adjDirection, setAdjDirection] = useState<AdjustmentDirection>("INCREASE");
   const [reason, setReason] = useState("");
   const [refId, setRefId] = useState("");
   const [modalLoading, setModalLoading] = useState(false);
   const [modalError, setModalError] = useState<string | null>(null);
+
+  // Reconciliation Report Modal
+  const [showReconModal, setShowReconModal] = useState(false);
+  const [reconReport, setReconReport] = useState<StockReconciliationReport | null>(null);
+  const [reconLoading, setReconLoading] = useState(false);
+  const [reconError, setReconError] = useState<string | null>(null);
 
   const fetchMovements = async () => {
     if (!isAdmin) {
@@ -68,6 +82,20 @@ export const InventoryView: React.FC = () => {
       setProducts(res.items);
     } catch (err: any) {
       console.error(err);
+    }
+  };
+
+  const handleRunReconciliation = async () => {
+    setShowReconModal(true);
+    setReconLoading(true);
+    setReconError(null);
+    try {
+      const report = await api.getReconciliationReport();
+      setReconReport(report);
+    } catch (err: any) {
+      setReconError(err?.message || "Failed to execute inventory reconciliation.");
+    } finally {
+      setReconLoading(false);
     }
   };
 
@@ -114,14 +142,20 @@ export const InventoryView: React.FC = () => {
     setModalLoading(true);
     setModalError(null);
 
+    if (movementType === "RETURN" && !refId.trim()) {
+      setModalError("Reference Document ID is required for RETURN movements to ensure auditability.");
+      setModalLoading(false);
+      return;
+    }
+
     try {
       await api.createInventoryMovement({
         product_id: targetProductId,
         type: movementType,
         quantity: parseInt(quantity, 10),
-        is_deduction: movementType === "ADJUSTMENT" ? isDeduction : false,
+        adjustment_direction: movementType === "ADJUSTMENT" ? adjDirection : undefined,
         reason,
-        reference_id: refId || undefined,
+        reference_id: refId.trim() || undefined,
       });
       setShowModal(false);
       setReason("");
@@ -140,18 +174,27 @@ export const InventoryView: React.FC = () => {
         <div>
           <h2 className="text-2xl font-bold text-white tracking-tight">Append-Only Audit Ledger</h2>
           <p className="text-sm text-slate-400 mt-1">
-            Immutable transaction history enforced by native PostgreSQL database triggers
+            Database-enforced append-only inventory history protected by PostgreSQL triggers
           </p>
         </div>
 
         {isAdmin && (
-          <button
-            onClick={() => setShowModal(true)}
-            className="flex items-center gap-2 px-4 py-2.5 bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold rounded-xl shadow-lg shadow-brand-500/20 transition-all self-start sm:self-auto"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Record Manual Movement</span>
-          </button>
+          <div className="flex items-center gap-2.5 self-start sm:self-auto">
+            <button
+              onClick={handleRunReconciliation}
+              className="flex items-center gap-2 px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl border border-slate-700 transition-all shadow-sm"
+            >
+              <FileCheck2 className="w-4 h-4 text-emerald-400" />
+              <span>Verify Reconciliation</span>
+            </button>
+            <button
+              onClick={() => setShowModal(true)}
+              className="flex items-center gap-2 px-4 py-2.5 bg-brand-600 hover:bg-brand-500 text-white text-xs font-semibold rounded-xl shadow-lg shadow-brand-500/20 transition-all"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Record Manual Movement</span>
+            </button>
+          </div>
         )}
       </div>
 
@@ -168,14 +211,13 @@ export const InventoryView: React.FC = () => {
           <strong className="text-white">Append-Only Immutability:</strong> The{" "}
           <code className="text-emerald-400 font-mono">inventory_movements</code> table is guarded by the{" "}
           <code className="text-emerald-400 font-mono">trg_immutable_inventory_movements</code> PostgreSQL trigger.
-          Any raw <code className="text-rose-400 font-mono">UPDATE</code> or{" "}
-          <code className="text-rose-400 font-mono">DELETE</code> attempt is terminated by the RDBMS engine, ensuring regulatory compliance and accounting integrity.
+          Every row has a strictly incrementing <code className="text-brand-400 font-mono">movement_sequence</code> and arithmetic check constraints, guaranteeing mathematical integrity.
         </div>
       </div>
 
       {/* Filter Tabs */}
       <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs">
-        {["", "IN", "OUT", "ADJUSTMENT", "RETURN"].map((t) => (
+        {["", "OPENING", "IN", "OUT", "ADJUSTMENT", "RETURN"].map((t) => (
           <button
             key={t}
             onClick={() => {
@@ -199,38 +241,48 @@ export const InventoryView: React.FC = () => {
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-950 text-slate-400 font-mono uppercase text-[11px] border-b border-slate-800">
               <tr>
-                <th className="px-6 py-4 font-semibold">Type</th>
-                <th className="px-6 py-4 font-semibold">Qty</th>
-                <th className="px-6 py-4 font-semibold">Stock Transition</th>
-                <th className="px-6 py-4 font-semibold">Audit Justification / Reason</th>
-                <th className="px-6 py-4 font-semibold">Ref / Document</th>
-                <th className="px-6 py-4 font-semibold">Timestamp</th>
+                <th className="px-5 py-4 font-semibold">Seq #</th>
+                <th className="px-5 py-4 font-semibold">Type</th>
+                <th className="px-5 py-4 font-semibold">Qty</th>
+                <th className="px-5 py-4 font-semibold">Stock Transition</th>
+                <th className="px-5 py-4 font-semibold">Audit Justification / Reason</th>
+                <th className="px-5 py-4 font-semibold">Ref / Document</th>
+                <th className="px-5 py-4 font-semibold">Timestamp</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60 font-sans">
               {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-slate-400">
+                  <td colSpan={7} className="px-6 py-12 text-center text-slate-400">
                     <Loader2 className="w-6 h-6 text-brand-500 animate-spin mx-auto mb-2" />
                     Querying immutable ledger...
                   </td>
                 </tr>
               ) : movements.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-12 text-center text-slate-500">
+                  <td colSpan={7} className="px-6 py-12 text-center text-slate-500">
                     <History className="w-8 h-8 mx-auto mb-2 text-slate-600" />
                     No movements found for this filter.
                   </td>
                 </tr>
               ) : (
                 movements.map((m) => {
-                  const isOut = m.type === "OUT" || (m.type === "ADJUSTMENT" && m.new_stock < m.previous_stock);
+                  const isOut =
+                    m.type === "OUT" ||
+                    (m.type === "ADJUSTMENT" &&
+                      (m.adjustment_direction === "DECREASE" || m.new_stock < m.previous_stock));
+                  const isOpening = m.type === "OPENING";
                   return (
                     <tr key={m.id} className="hover:bg-slate-850/50 transition-colors">
-                      <td className="px-6 py-4">
+                      <td className="px-5 py-4 font-mono font-bold text-slate-400">
+                        #{m.movement_sequence}
+                      </td>
+                      <td className="px-5 py-4">
                         <span
                           className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-mono font-bold ${
-                            isOut
+                            isOpening
+                              ? "bg-indigo-950/60 text-indigo-400 border border-indigo-500/30"
+                              : isOut
                               ? "bg-rose-950/60 text-rose-400 border border-rose-500/30"
                               : "bg-emerald-950/60 text-emerald-400 border border-emerald-500/30"
                           }`}
@@ -241,20 +293,21 @@ export const InventoryView: React.FC = () => {
                             <ArrowUpRight className="w-3.5 h-3.5" />
                           )}
                           {m.type}
+                          {m.type === "ADJUSTMENT" && m.adjustment_direction && ` (${m.adjustment_direction})`}
                         </span>
                       </td>
-                      <td className="px-6 py-4 font-mono font-bold text-white">
+                      <td className="px-5 py-4 font-mono font-bold text-white">
                         {isOut ? `-${m.quantity}` : `+${m.quantity}`}
                       </td>
-                      <td className="px-6 py-4 font-mono text-slate-300">
+                      <td className="px-5 py-4 font-mono text-slate-300">
                         {m.previous_stock} &rarr;{" "}
                         <strong className="text-white">{m.new_stock} units</strong>
                       </td>
-                      <td className="px-6 py-4 text-slate-200">{m.reason}</td>
-                      <td className="px-6 py-4 font-mono text-[11px] text-slate-400">
+                      <td className="px-5 py-4 text-slate-200">{m.reason}</td>
+                      <td className="px-5 py-4 font-mono text-[11px] text-slate-400">
                         {m.reference_id || "-"}
                       </td>
-                      <td className="px-6 py-4 text-[11px] text-slate-400">
+                      <td className="px-5 py-4 text-[11px] text-slate-400">
                         {new Date(m.created_at).toLocaleString("en-US")}
                       </td>
                     </tr>
@@ -342,7 +395,7 @@ export const InventoryView: React.FC = () => {
                   >
                     <option value="IN">IN (Restock)</option>
                     <option value="RETURN">RETURN (Customer Return)</option>
-                    <option value="ADJUSTMENT">ADJUSTMENT (Audit / Damaged)</option>
+                    <option value="ADJUSTMENT">ADJUSTMENT (Audit)</option>
                     <option value="OUT">OUT (Manual Exit)</option>
                   </select>
                 </div>
@@ -361,27 +414,49 @@ export const InventoryView: React.FC = () => {
               </div>
 
               {movementType === "ADJUSTMENT" && (
-                <div className="flex items-center gap-2 p-2.5 rounded-xl bg-slate-950 border border-slate-800">
-                  <input
-                    type="checkbox"
-                    id="deduct"
-                    checked={isDeduction}
-                    onChange={(e) => setIsDeduction(e.target.checked)}
-                    className="rounded text-brand-600 focus:ring-0"
-                  />
-                  <label htmlFor="deduct" className="text-slate-300 cursor-pointer">
-                    Deduct from stock (damaged goods, loss, or count discrepancy)
-                  </label>
+                <div>
+                  <label className="block font-medium text-slate-300 mb-1">Adjustment Direction *</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setAdjDirection("INCREASE")}
+                      className={`py-2 px-3 rounded-xl border text-center font-medium ${
+                        adjDirection === "INCREASE"
+                          ? "bg-emerald-950/60 border-emerald-500/50 text-emerald-400 font-bold"
+                          : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      + INCREASE (Add)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAdjDirection("DECREASE")}
+                      className={`py-2 px-3 rounded-xl border text-center font-medium ${
+                        adjDirection === "DECREASE"
+                          ? "bg-rose-950/60 border-rose-500/50 text-rose-400 font-bold"
+                          : "bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200"
+                      }`}
+                    >
+                      - DECREASE (Deduct)
+                    </button>
+                  </div>
                 </div>
               )}
 
               <div>
-                <label className="block font-medium text-slate-300 mb-1">Reference Document ID</label>
+                <label className="block font-medium text-slate-300 mb-1">
+                  Reference Document ID {movementType === "RETURN" && <span className="text-amber-400">*</span>}
+                </label>
                 <input
                   type="text"
+                  required={movementType === "RETURN"}
                   value={refId}
                   onChange={(e) => setRefId(e.target.value)}
-                  placeholder="e.g. INVOICE-9821 or AUDIT-2026-01"
+                  placeholder={
+                    movementType === "RETURN"
+                      ? "Original Order ID or RMA Reference (required)"
+                      : "e.g. INVOICE-9821 or AUDIT-2026-01"
+                  }
                   className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-slate-100 focus:outline-none focus:border-brand-500 font-mono"
                 />
               </div>
@@ -407,6 +482,121 @@ export const InventoryView: React.FC = () => {
                 <span>Append Movement to Ledger</span>
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Reconciliation Modal */}
+      {showReconModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl p-6 shadow-2xl relative">
+            <button
+              onClick={() => setShowReconModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-2">
+              <div className="w-10 h-10 rounded-xl bg-emerald-950/60 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
+                <FileCheck2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-white">Stock Reconciliation Diagnostic</h3>
+                <p className="text-xs text-slate-400">
+                  Executed under PostgreSQL <code>REPEATABLE READ, READ ONLY</code> snapshot isolation
+                </p>
+              </div>
+            </div>
+
+            {reconLoading ? (
+              <div className="py-16 text-center text-slate-400 space-y-3">
+                <Loader2 className="w-8 h-8 text-emerald-400 animate-spin mx-auto" />
+                <p className="text-sm font-medium text-slate-300">
+                  Verifying sequence, chain continuity, and ledger arithmetic across all products...
+                </p>
+              </div>
+            ) : reconError ? (
+              <div className="p-4 my-4 rounded-xl bg-rose-950/60 border border-rose-500/40 text-rose-300 text-sm">
+                {reconError}
+              </div>
+            ) : reconReport ? (
+              <div className="space-y-4 my-4 text-xs">
+                {/* Metric Cards */}
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl">
+                    <span className="text-[11px] text-slate-400">Products Checked</span>
+                    <p className="text-lg font-bold text-white mt-1">{reconReport.total_products_checked}</p>
+                  </div>
+                  <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl">
+                    <span className="text-[11px] text-slate-400">Consistent</span>
+                    <p className="text-lg font-bold text-emerald-400 mt-1">
+                      {reconReport.consistent_products_count}
+                    </p>
+                  </div>
+                  <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl">
+                    <span className="text-[11px] text-slate-400">Discrepancies</span>
+                    <p
+                      className={`text-lg font-bold mt-1 ${
+                        reconReport.discrepant_products_count > 0 ? "text-rose-400" : "text-slate-400"
+                      }`}
+                    >
+                      {reconReport.discrepant_products_count}
+                    </p>
+                  </div>
+                </div>
+
+                {reconReport.is_consistent ? (
+                  <div className="p-4 rounded-xl bg-emerald-950/40 border border-emerald-500/30 flex items-center gap-3 text-emerald-300">
+                    <CheckCircle2 className="w-6 h-6 text-emerald-400 shrink-0" />
+                    <div>
+                      <p className="font-semibold text-sm text-emerald-200">100% Ledger Consistency Verified</p>
+                      <p className="text-xs text-emerald-400/80 mt-0.5">
+                        All physical product stock balances perfectly match the sum of their sequential, immutable audit movements.
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="font-semibold text-rose-400">Discrepancies Detected:</p>
+                    <div className="max-h-60 overflow-y-auto space-y-2 pr-1">
+                      {reconReport.discrepancies.map((d) => (
+                        <div
+                          key={d.product_id}
+                          className="p-3 rounded-xl bg-rose-950/30 border border-rose-500/30 text-rose-200 space-y-1"
+                        >
+                          <div className="flex justify-between font-mono font-bold">
+                            <span>[{d.sku}] {d.product_name}</span>
+                            <span>Delta: {d.discrepancy_delta}</span>
+                          </div>
+                          <p className="text-[11px] text-slate-400">
+                            Current Stock: {d.current_stock_quantity} | Ledger Stock: {d.calculated_ledger_stock}
+                          </p>
+                          {d.sequence_errors.map((e, idx) => (
+                            <p key={idx} className="text-[11px] text-amber-300">• Seq: {e}</p>
+                          ))}
+                          {d.continuity_errors.map((e, idx) => (
+                            <p key={idx} className="text-[11px] text-amber-300">• Chain: {e}</p>
+                          ))}
+                          {d.arithmetic_errors.map((e, idx) => (
+                            <p key={idx} className="text-[11px] text-rose-300">• Math: {e}</p>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => setShowReconModal(false)}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold"
+              >
+                Close Diagnostic
+              </button>
+            </div>
           </div>
         </div>
       )}

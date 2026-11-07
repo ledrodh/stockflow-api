@@ -25,6 +25,7 @@ from stockflow.models.order import Order, OrderItem, OrderStatus
 from stockflow.models.product import Product
 from stockflow.schemas.common import PaginatedResponse
 from stockflow.schemas.order import OrderCreate, OrderItemResponse, OrderResponse
+from stockflow.services.inventory_service import get_next_movement_sequence
 
 
 def compute_order_request_hash(payload: OrderCreate) -> str:
@@ -198,8 +199,10 @@ async def create_order_atomic(
                 )
                 order_items.append(order_item)
 
+                movement_seq = await get_next_movement_sequence(session, product.id)
                 movement = InventoryMovement(
                     product_id=product.id,
+                    movement_sequence=movement_seq,
                     type=MovementType.OUT.value,
                     quantity=item.quantity,
                     previous_stock=previous_stock,
@@ -354,8 +357,10 @@ async def cancel_order_atomic(
                 new_stock = previous_stock + item.quantity
                 product.stock_quantity = new_stock
 
+                movement_seq = await get_next_movement_sequence(session, product.id)
                 movement = InventoryMovement(
                     product_id=product.id,
+                    movement_sequence=movement_seq,
                     type=MovementType.RETURN.value,
                     quantity=item.quantity,
                     previous_stock=previous_stock,

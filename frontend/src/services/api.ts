@@ -7,6 +7,7 @@ import {
   PaginatedResponse,
   Product,
   ProductCreatePayload,
+  StockReconciliationReport,
   TokenResponse,
   User,
 } from "../types/api";
@@ -158,6 +159,10 @@ class ApiClient {
       method: "POST",
       body: JSON.stringify(payload),
     });
+  }
+
+  async getReconciliationReport(): Promise<StockReconciliationReport> {
+    return this.request<StockReconciliationReport>("/inventory/reconcile");
   }
 }
 

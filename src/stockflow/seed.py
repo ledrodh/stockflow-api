@@ -143,12 +143,13 @@ async def seed_demo_data() -> None:
 
                 movement = InventoryMovement(
                     product_id=new_prod.id,
-                    type=MovementType.IN.value,
+                    movement_sequence=1,
+                    type=MovementType.OPENING.value,
                     quantity=new_prod.stock_quantity,
                     previous_stock=0,
                     new_stock=new_prod.stock_quantity,
                     reference_id=f"INIT-{new_prod.sku}",
-                    reason="Initial catalog stock entry",
+                    reason="Initial catalog opening stock",
                     created_by=admin.id,
                 )
                 session.add(movement)

@@ -1,6 +1,7 @@
 """Integration tests for atomic Order processing, PostgreSQL Idempotency, and Immutable Ledger."""
 
 import asyncio
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -8,6 +9,8 @@ from httpx import AsyncClient
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from stockflow.models.product import Product
 
 
 async def test_atomic_order_snapshots_idempotency_and_traceability(
@@ -368,3 +371,150 @@ async def test_idempotency_ttl_expiration_allows_new_order(
     assert second_resp.status_code == 201
     second_order_id = second_resp.json()["id"]
     assert second_order_id != first_order_id
+
+
+async def test_inventory_movement_validation_rules(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+) -> None:
+    """Validate strict schema rules for inventory adjustments and returns."""
+    # 1. Create product
+    prod = (
+        await client.post(
+            "/api/v1/products",
+            headers=admin_headers,
+            json={
+                "sku": "RULE-CHECK-01",
+                "name": "Validation Rule Check Product",
+                "price": "99.00",
+                "stock_quantity": 10,
+            },
+        )
+    ).json()
+    product_id = prod["id"]
+
+    # 2. RETURN without reference_id must be rejected (422)
+    ret_fail = await client.post(
+        "/api/v1/inventory/movements",
+        headers=admin_headers,
+        json={
+            "product_id": product_id,
+            "type": "RETURN",
+            "quantity": 2,
+            "reason": "Customer return missing original order reference",
+        },
+    )
+    assert ret_fail.status_code == 422
+    assert "reference_id is strictly required for RETURN" in ret_fail.text
+
+    # 3. ADJUSTMENT without direction must be rejected (422)
+    adj_fail = await client.post(
+        "/api/v1/inventory/movements",
+        headers=admin_headers,
+        json={
+            "product_id": product_id,
+            "type": "ADJUSTMENT",
+            "quantity": 3,
+            "reason": "Missing adjustment direction",
+        },
+    )
+    assert adj_fail.status_code == 422
+    assert "adjustment_direction" in adj_fail.text
+
+    # 4. Valid ADJUSTMENT with adjustment_direction='DECREASE' succeeds (201)
+    adj_ok = await client.post(
+        "/api/v1/inventory/movements",
+        headers=admin_headers,
+        json={
+            "product_id": product_id,
+            "type": "ADJUSTMENT",
+            "quantity": 3,
+            "adjustment_direction": "DECREASE",
+            "reason": "Damaged goods in storage",
+        },
+    )
+    assert adj_ok.status_code == 201
+    assert adj_ok.json()["new_stock"] == 7
+    assert adj_ok.json()["adjustment_direction"] == "DECREASE"
+    assert adj_ok.json()["movement_sequence"] == 2
+
+
+async def test_database_enforces_arithmetic_check_constraint(
+    db_session: AsyncSession,
+) -> None:
+    """Verify PostgreSQL CheckConstraint blocks inconsistent new_stock calculations."""
+    product = Product(
+        sku="ARITH-CHECK-01",
+        name="Arithmetic Constraint Test Item",
+        price=Decimal("10.00"),
+        stock_quantity=10,
+        min_stock=2,
+        is_active=True,
+    )
+    db_session.add(product)
+    await db_session.flush()
+
+    # Attempt to insert an IN movement where new_stock != previous_stock + quantity
+    # previous=10, quantity=5, new_stock=99 (violates arithmetic constraint)
+    with pytest.raises(DBAPIError, match="chk_inventory_movement_arithmetic"):
+        await db_session.execute(
+            text(
+                """
+                INSERT INTO inventory_movements (
+                    id, product_id, movement_sequence, type, quantity,
+                    previous_stock, new_stock, reason
+                ) VALUES (
+                    gen_random_uuid(), :product_id, 2, 'IN', 5,
+                    10, 99, 'Violating arithmetic constraint'
+                );
+                """
+            ),
+            {"product_id": product.id},
+        )
+    await db_session.rollback()
+
+
+async def test_concurrent_same_idempotency_key_multi_request_race_condition(
+    client: AsyncClient,
+    admin_headers: dict[str, str],
+    customer_headers: dict[str, str],
+) -> None:
+    """8 simultaneous requests with the same idempotency key create exactly 1 order."""
+    prod = (
+        await client.post(
+            "/api/v1/products",
+            headers=admin_headers,
+            json={
+                "sku": "MULTI-RACE-01",
+                "name": "High Contention Product",
+                "price": "50.00",
+                "stock_quantity": 20,
+            },
+        )
+    ).json()
+    product_id = prod["id"]
+
+    same_key = f"multi-race-{uuid4()}"
+    payload = {"items": [{"product_id": product_id, "quantity": 2}]}
+
+    tasks = [
+        client.post(
+            "/api/v1/orders",
+            headers={**customer_headers, "Idempotency-Key": same_key},
+            json=payload,
+        )
+        for _ in range(8)
+    ]
+
+    responses = await asyncio.gather(*tasks)
+    # Filter 201 Created vs 409 Conflict (allowed if in-flight race is caught before completion)
+    success_responses = [r for r in responses if r.status_code == 201]
+    assert len(success_responses) >= 1
+
+    first_order_id = success_responses[0].json()["id"]
+    for r in success_responses:
+        assert r.json()["id"] == first_order_id
+
+    # Check product stock: exactly 2 units deducted (20 - 2 = 18)
+    prod_check = await client.get(f"/api/v1/products/{product_id}", headers=customer_headers)
+    assert prod_check.json()["stock_quantity"] == 18

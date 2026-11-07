@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Package,
   Boxes,
@@ -20,32 +20,49 @@ export const DashboardView: React.FC = () => {
   const [data, setData] = useState<DashboardSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const isFetchingRef = useRef(false);
 
   const fetchSummary = async () => {
-    if (!isAdmin) {
-      setLoading(false);
+    if (!isAdmin || isFetchingRef.current) {
+      if (!isAdmin) setLoading(false);
       return;
     }
+    isFetchingRef.current = true;
     setLoading(true);
     setError(null);
     try {
       const summary = await api.getDashboardSummary();
       setData(summary);
+      setLastUpdated(new Date());
     } catch (err: any) {
       setError(err?.message || "Failed to load dashboard metrics.");
     } finally {
       setLoading(false);
+      isFetchingRef.current = false;
     }
   };
 
   useEffect(() => {
+    let isCancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+
+    const poll = async () => {
+      if (!isAdmin || isCancelled) return;
+      await fetchSummary();
+      if (!isCancelled) {
+        timer = setTimeout(poll, 30000);
+      }
+    };
+
     if (!authLoading && isAdmin) {
-      fetchSummary();
-      const interval = setInterval(() => {
-        fetchSummary();
-      }, 30000);
-      return () => clearInterval(interval);
+      poll();
     }
+
+    return () => {
+      isCancelled = true;
+      clearTimeout(timer);
+    };
   }, [authLoading, isAdmin]);
 
   if (authLoading || (loading && !data && isAdmin)) {
@@ -81,17 +98,24 @@ export const DashboardView: React.FC = () => {
         <div>
           <h2 className="text-2xl font-bold text-white tracking-tight">Inventory & Sales Dashboard</h2>
           <p className="text-sm text-slate-400 mt-1">
-            Consolidated metrics computed directly from PostgreSQL relational engine (periodic auto-refresh)
+            Consolidated metrics computed directly from PostgreSQL relational engine (non-overlapping 30s auto-refresh)
           </p>
         </div>
-        <button
-          onClick={fetchSummary}
-          disabled={loading}
-          className="self-start sm:self-auto flex items-center gap-2 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl border border-slate-700 transition-colors"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
-          <span>Refresh Data</span>
-        </button>
+        <div className="flex items-center gap-3">
+          {lastUpdated && (
+            <span className="text-xs text-slate-500 font-mono">
+              Last updated: {lastUpdated.toLocaleTimeString()}
+            </span>
+          )}
+          <button
+            onClick={() => fetchSummary()}
+            disabled={loading}
+            className="self-start sm:self-auto flex items-center gap-2 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-xl border border-slate-700 transition-colors"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} />
+            <span>Refresh Data</span>
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -150,10 +174,10 @@ export const DashboardView: React.FC = () => {
           <p className="text-[11px] text-slate-400 mt-1">Processed atomically</p>
         </div>
 
-        {/* Revenue */}
+        {/* Confirmed Order Value */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-sm">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-slate-400">Total Revenue</span>
+            <span className="text-xs font-medium text-slate-400">Confirmed Order Value</span>
             <div className="p-2 rounded-xl bg-purple-950/60 text-purple-400 border border-purple-500/20">
               <DollarSign className="w-4 h-4" />
             </div>
@@ -161,7 +185,7 @@ export const DashboardView: React.FC = () => {
           <p className="text-xl font-bold text-white mt-3">
             ${Number(data?.total_revenue || 0).toLocaleString("en-US", { minimumFractionDigits: 2 })}
           </p>
-          <p className="text-[11px] text-slate-400 mt-1">Gross sales volume</p>
+          <p className="text-[11px] text-slate-400 mt-1">Confirmed orders volume</p>
         </div>
       </div>
 
@@ -170,7 +194,7 @@ export const DashboardView: React.FC = () => {
         {/* Recent Orders */}
         <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
           <div className="flex items-center justify-between mb-4">
-            <h3 className="font-semibold text-white text-base">Recent Confirmed Orders</h3>
+            <h3 className="font-semibold text-white text-base">Recent Orders</h3>
             <span className="text-xs font-mono text-slate-400">Immutable Snapshot</span>
           </div>
 

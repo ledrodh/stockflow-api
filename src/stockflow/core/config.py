@@ -2,11 +2,25 @@
 
 from functools import lru_cache
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from sqlalchemy.engine import make_url
 
 DEFAULT_INSECURE_SECRET_KEY = "stockflow-dev-secret-jwt-key-safe-for-local-dev-only-2026"
 DEFAULT_INSECURE_POSTGRES_PASSWORD = "stockflow_secret_password"
+
+KNOWN_INSECURE_SECRETS: frozenset[str] = frozenset(
+    {
+        DEFAULT_INSECURE_SECRET_KEY,
+        "change-this-super-secret-jwt-key-in-production-min-32-chars",
+        "secret",
+        "secretkey",
+        "changeme",
+        "password",
+        "12345678901234567890123456789012",
+        "default-insecure-secret-key-replace-me",
+    }
+)
 
 
 class Settings(BaseSettings):
@@ -45,8 +59,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str | None = None
 
     # Security & JWT
-    SECRET_KEY: str = Field(
-        default=DEFAULT_INSECURE_SECRET_KEY,
+    SECRET_KEY: SecretStr = Field(
+        default=SecretStr(DEFAULT_INSECURE_SECRET_KEY),
         min_length=32,
     )
     JWT_ALGORITHM: str = "HS256"
@@ -58,28 +72,47 @@ class Settings(BaseSettings):
 
     # Operations & Seeding
     ENABLE_DEMO_SEED: bool = False
+    ALLOW_DESTRUCTIVE_TEST_RESET: bool = False
 
     @field_validator("DATABASE_URL", mode="before")
     @classmethod
     def validate_no_sqlite(cls, value: str | None) -> str | None:
         """Ensure SQLite is never used, enforcing PostgreSQL-only execution."""
-        if value and "sqlite" in value.lower():
-            raise ValueError("SQLite is strictly prohibited. StockFlow API requires PostgreSQL.")
+        if value:
+            parsed = make_url(value)
+            if parsed.get_backend_name() != "postgresql":
+                raise ValueError(
+                    f"Backend '{parsed.get_backend_name()}' is prohibited. "
+                    "StockFlow API requires PostgreSQL."
+                )
         return value
 
     @model_validator(mode="after")
-    def validate_production_secrets(self) -> "Settings":
-        """Disallow default development credentials and keys in production environments."""
+    def validate_production_configuration(self) -> "Settings":
+        """Disallow default development credentials and insecure secrets in production."""
         if self.APP_ENV == "production":
-            if self.SECRET_KEY == DEFAULT_INSECURE_SECRET_KEY:
+            raw_secret = self.SECRET_KEY.get_secret_value()
+            if raw_secret in KNOWN_INSECURE_SECRETS:
                 raise ValueError(
-                    "In production, SECRET_KEY must be set to a secure, randomly generated "
-                    "secret via environment variable and cannot use the development default."
+                    "In production, SECRET_KEY must be a cryptographically secure random value "
+                    "(e.g., secrets.token_urlsafe(32)) and cannot use known insecure "
+                    "or default keys."
                 )
-            if self.POSTGRES_PASSWORD == DEFAULT_INSECURE_POSTGRES_PASSWORD:
+
+            effective_url = make_url(self.async_database_url)
+            if effective_url.get_backend_name() != "postgresql":
+                raise ValueError("In production, the database backend must be PostgreSQL.")
+            if (
+                not effective_url.password
+                or effective_url.password == DEFAULT_INSECURE_POSTGRES_PASSWORD
+            ):
                 raise ValueError(
                     "In production, POSTGRES_PASSWORD must be configured securely and "
                     "cannot use the default development password."
+                )
+            if not effective_url.database:
+                raise ValueError(
+                    "In production, a specific target database name must be configured."
                 )
         return self
 

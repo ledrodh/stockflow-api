@@ -51,8 +51,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab, onTabChange }) => {
   ];
 
   const visibleNavItems = navItems.filter((item) => {
-    // Hide administrative management options for customer accounts
-    if (user && !isAdmin && item.adminOnly) {
+    // Admin-only items are visible strictly to authenticated administrators
+    if (item.adminOnly && !isAdmin) {
       return false;
     }
     return true;

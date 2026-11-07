@@ -7,10 +7,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from stockflow.core.config import settings
 from stockflow.core.exceptions import InsufficientStockError, NotFoundError
-from stockflow.models.inventory import InventoryMovement, MovementType
+from stockflow.models.inventory import AdjustmentDirection, InventoryMovement, MovementType
 from stockflow.models.product import Product
 from stockflow.schemas.common import PaginatedResponse
 from stockflow.schemas.inventory import InventoryMovementCreate, InventoryMovementResponse
+
+
+async def get_next_movement_sequence(session: AsyncSession, product_id: UUID) -> int:
+    """Return the next strictly sequential movement index for a locked product."""
+    seq_stmt = select(func.coalesce(func.max(InventoryMovement.movement_sequence), 0) + 1).where(
+        InventoryMovement.product_id == product_id
+    )
+    return (await session.execute(seq_stmt)).scalar_one()
 
 
 async def register_inventory_movement(
@@ -31,8 +39,17 @@ async def register_inventory_movement(
             )
 
         previous_stock = product.stock_quantity
+        adjustment_dir: str | None = None
+        if payload.type == MovementType.ADJUSTMENT:
+            adjustment_dir = (
+                payload.adjustment_direction.value
+                if payload.adjustment_direction
+                else ("DECREASE" if payload.is_deduction else "INCREASE")
+            )
+
         is_outbound = payload.type == MovementType.OUT or (
-            payload.type == MovementType.ADJUSTMENT and payload.is_deduction
+            payload.type == MovementType.ADJUSTMENT
+            and adjustment_dir == AdjustmentDirection.DECREASE.value
         )
 
         if is_outbound:
@@ -52,10 +69,13 @@ async def register_inventory_movement(
             new_stock = previous_stock + payload.quantity
 
         product.stock_quantity = new_stock
+        next_seq = await get_next_movement_sequence(session, product.id)
 
         movement = InventoryMovement(
             product_id=product.id,
+            movement_sequence=next_seq,
             type=payload.type.value,
+            adjustment_direction=adjustment_dir,
             quantity=payload.quantity,
             previous_stock=previous_stock,
             new_stock=new_stock,
@@ -91,15 +111,16 @@ async def list_inventory_movements(
     count_stmt = select(func.count()).select_from(base_stmt.subquery())
     total = (await session.execute(count_stmt)).scalar_one()
 
-    items_stmt = (
-        base_stmt.order_by(InventoryMovement.created_at.desc(), InventoryMovement.id.asc())
+    data_stmt = (
+        base_stmt.order_by(InventoryMovement.created_at.desc(), InventoryMovement.id.desc())
         .limit(limit)
         .offset(offset)
     )
-    movements = (await session.execute(items_stmt)).scalars().all()
+    result = await session.execute(data_stmt)
+    items = result.scalars().all()
 
     return PaginatedResponse[InventoryMovementResponse](
-        items=[InventoryMovementResponse.model_validate(m) for m in movements],
+        items=[InventoryMovementResponse.model_validate(item) for item in items],
         total=total,
         limit=limit,
         offset=offset,

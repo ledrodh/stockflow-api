@@ -9,6 +9,7 @@ from alembic import command
 from alembic.config import Config
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -28,11 +29,14 @@ DEFAULT_TEST_DB_URL = (
 )
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", DEFAULT_TEST_DB_URL)
 
-if "sqlite" in TEST_DATABASE_URL.lower():
-    raise RuntimeError("SQLite is strictly prohibited for StockFlow API tests. Use PostgreSQL.")
+parsed_test_url = make_url(TEST_DATABASE_URL)
+if parsed_test_url.get_backend_name() != "postgresql":
+    raise RuntimeError(
+        f"Backend '{parsed_test_url.get_backend_name()}' is prohibited. Tests require PostgreSQL."
+    )
 
 # Safety guard: Prevent accidental data loss against non-test databases
-_target_db_name = TEST_DATABASE_URL.rsplit("/", 1)[-1].split("?")[0].lower()
+_target_db_name = (parsed_test_url.database or "").lower()
 if "test" not in _target_db_name:
     raise RuntimeError(
         f"SAFETY GUARD: Destructive test schema reset refused. Database name '{_target_db_name}' "
@@ -41,6 +45,12 @@ if "test" not in _target_db_name:
 
 if settings.APP_ENV == "production":
     raise RuntimeError("SAFETY GUARD: Tests cannot be executed against production environment.")
+
+if os.getenv("ALLOW_DESTRUCTIVE_TEST_RESET", "true").lower() not in ("true", "1", "yes"):
+    raise RuntimeError(
+        "SAFETY GUARD: Destructive test reset refused. "
+        "ALLOW_DESTRUCTIVE_TEST_RESET=true is required."
+    )
 
 _SCHEMA_INITIALIZED = False
 

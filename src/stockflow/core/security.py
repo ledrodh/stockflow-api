@@ -41,7 +41,11 @@ def create_access_token(
         "iat": now,
         "exp": expire,
     }
-    return jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
+    return jwt.encode(
+        to_encode,
+        settings.SECRET_KEY.get_secret_value(),
+        algorithm=settings.JWT_ALGORITHM,
+    )
 
 
 def decode_access_token(token: str) -> dict[str, Any]:
@@ -49,7 +53,7 @@ def decode_access_token(token: str) -> dict[str, Any]:
     try:
         payload: dict[str, Any] = jwt.decode(
             token,
-            settings.SECRET_KEY,
+            settings.SECRET_KEY.get_secret_value(),
             algorithms=[settings.JWT_ALGORITHM],
         )
         if "sub" not in payload:

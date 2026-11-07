@@ -63,12 +63,15 @@ export interface OrderCreatePayload {
   }>;
 }
 
-export type MovementType = "IN" | "OUT" | "ADJUSTMENT" | "RETURN";
+export type MovementType = "IN" | "OUT" | "ADJUSTMENT" | "RETURN" | "OPENING";
+export type AdjustmentDirection = "INCREASE" | "DECREASE";
 
 export interface InventoryMovement {
   id: string;
   product_id: string;
+  movement_sequence: number;
   type: MovementType;
+  adjustment_direction?: AdjustmentDirection | null;
   quantity: number;
   previous_stock: number;
   new_stock: number;
@@ -82,6 +85,7 @@ export interface InventoryMovementCreatePayload {
   product_id: string;
   type: MovementType;
   quantity: number;
+  adjustment_direction?: AdjustmentDirection;
   is_deduction?: boolean;
   reference_id?: string;
   reason: string;
@@ -102,6 +106,29 @@ export interface DashboardSummary {
   total_revenue: string;
   recent_orders: Order[];
   recent_movements: InventoryMovement[];
+}
+
+export interface ProductDiscrepancy {
+  product_id: string;
+  sku: string;
+  product_name: string;
+  current_stock_quantity: number;
+  calculated_ledger_stock: number;
+  discrepancy_delta: number;
+  sequence_errors: string[];
+  continuity_errors: string[];
+  arithmetic_errors: string[];
+  is_consistent: boolean;
+}
+
+export interface StockReconciliationReport {
+  generated_at: string;
+  snapshot_isolation_level: string;
+  total_products_checked: number;
+  consistent_products_count: number;
+  discrepant_products_count: number;
+  is_consistent: boolean;
+  discrepancies: ProductDiscrepancy[];
 }
 
 export interface ApiError {

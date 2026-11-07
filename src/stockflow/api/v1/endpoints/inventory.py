@@ -9,10 +9,12 @@ from stockflow.api.dependencies import AdminUserDep, DBSessionDep
 from stockflow.models.inventory import MovementType
 from stockflow.schemas.common import PaginatedResponse
 from stockflow.schemas.inventory import InventoryMovementCreate, InventoryMovementResponse
+from stockflow.schemas.reconciliation import StockReconciliationReport
 from stockflow.services.inventory_service import (
     list_inventory_movements,
     register_inventory_movement,
 )
+from stockflow.services.reconciliation_service import run_inventory_reconciliation
 
 router = APIRouter(prefix="/inventory", tags=["Inventory"])
 
@@ -58,3 +60,16 @@ async def list_inventory_movements_endpoint(
         product_id=product_id,
         movement_type=movement_type,
     )
+
+
+@router.get(
+    "/reconcile",
+    response_model=StockReconciliationReport,
+    summary="Run snapshot-consistent inventory ledger reconciliation (Admin only)",
+)
+async def reconcile_inventory_endpoint(
+    session: DBSessionDep,
+    _admin_user: AdminUserDep,
+) -> StockReconciliationReport:
+    """Execute 3-level ledger verification under REPEATABLE READ snapshot isolation."""
+    return await run_inventory_reconciliation(session=session)

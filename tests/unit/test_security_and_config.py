@@ -52,8 +52,52 @@ def test_jwt_expired_token_raises_authentication_error() -> None:
 
 def test_settings_prohibits_sqlite_database_url() -> None:
     """Ensure SQLite URLs are explicitly rejected by Settings validation."""
-    with pytest.raises(ValidationError, match="SQLite is strictly prohibited"):
+    with pytest.raises(ValidationError, match="prohibited"):
         Settings(DATABASE_URL="sqlite+aiosqlite:///./test.db")
+
+
+def test_settings_rejects_insecure_secrets_and_defaults_in_production() -> None:
+    """Ensure production environment strictly rejects default or blacklisted secrets."""
+    with pytest.raises(ValidationError, match="cannot use known insecure or default keys"):
+        Settings(
+            _env_file=None,
+            APP_ENV="production",
+            SECRET_KEY="stockflow-dev-secret-jwt-key-safe-for-local-dev-only-2026",
+            POSTGRES_PASSWORD="secure_prod_password_987!",
+        )
+
+    with pytest.raises(ValidationError, match="cannot use known insecure or default keys"):
+        Settings(
+            _env_file=None,
+            APP_ENV="production",
+            SECRET_KEY="change-this-super-secret-jwt-key-in-production-min-32-chars",
+            POSTGRES_PASSWORD="secure_prod_password_987!",
+        )
+
+    with pytest.raises(ValidationError, match="cannot use the default development password"):
+        Settings(
+            _env_file=None,
+            APP_ENV="production",
+            SECRET_KEY="a-very-strong-production-secret-token-key-2026",
+            POSTGRES_PASSWORD="stockflow_secret_password",
+        )
+
+
+def test_settings_accepts_valid_production_configuration() -> None:
+    """Ensure properly configured production settings pass validation."""
+    valid_prod = Settings(
+        _env_file=None,
+        APP_ENV="production",
+        SECRET_KEY="super-secure-production-random-token-min-32-chars-value!",
+        POSTGRES_PASSWORD="strong_production_password_2026#",
+        POSTGRES_HOST="db.internal.stockflow.io",
+        POSTGRES_DB="stockflow_production_db",
+    )
+    assert valid_prod.APP_ENV == "production"
+    assert (
+        valid_prod.SECRET_KEY.get_secret_value()
+        == "super-secure-production-random-token-min-32-chars-value!"
+    )
 
 
 def test_compute_order_request_hash_is_order_independent() -> None:

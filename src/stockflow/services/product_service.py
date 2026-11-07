@@ -43,7 +43,8 @@ async def create_product(
         if payload.stock_quantity > 0:
             initial_movement = InventoryMovement(
                 product_id=product.id,
-                type=MovementType.IN.value,
+                movement_sequence=1,
+                type=MovementType.OPENING.value,
                 quantity=payload.stock_quantity,
                 previous_stock=0,
                 new_stock=payload.stock_quantity,

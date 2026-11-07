@@ -64,6 +64,7 @@ erDiagram
         text description
         numeric price "CHECK (price >= 0)"
         integer stock_quantity "CHECK (stock_quantity >= 0)"
+        integer min_stock "CHECK (min_stock >= 0)"
         boolean is_active "Soft Delete flag"
         timestamptz created_at
         timestamptz updated_at
@@ -91,7 +92,9 @@ erDiagram
     INVENTORY_MOVEMENTS {
         uuid id PK
         uuid product_id FK
-        varchar type "IN | OUT | ADJUSTMENT | RETURN"
+        integer movement_sequence "UNIQUE(product_id, movement_sequence)"
+        varchar type "OPENING | IN | OUT | ADJUSTMENT | RETURN"
+        varchar adjustment_direction "INCREASE | DECREASE (Null for non-adjustments)"
         integer quantity "CHECK (quantity > 0)"
         integer previous_stock "CHECK (previous_stock >= 0)"
         integer new_stock "CHECK (new_stock >= 0)"
@@ -110,7 +113,7 @@ erDiagram
         integer response_code
         jsonb response_body "Cached OrderResponse"
         timestamptz created_at
-        timestamptz expires_at
+        timestamptz expires_at "INDEX (ix_idempotency_keys_expires_at)"
     }
 ```
 
@@ -236,7 +239,7 @@ StockFlow includes a responsive **Single Page Application (SPA)** in [`frontend/
 ```text
 StockFlow API/
 ├── .github/workflows/main.yml       # CI & Docker Validation Pipeline (Ruff, Mypy, Pytest, Vitest, Docker)
-├── docs/adr/                        # Architecture Decision Records (ADR-001 to ADR-003)
+├── docs/adr/                        # Architecture Decision Records (ADR-001 to ADR-005)
 ├── frontend/                        # React + TypeScript + Vite + Tailwind CSS Dashboard
 │   ├── src/
 │   │   ├── components/              # Sidebar, Header, LoginModal
@@ -253,23 +256,26 @@ StockFlow API/
 │   │       ├── endpoints/           # REST endpoints (/health, /dashboard, /auth, /products, /orders, /inventory)
 │   │       └── router.py            # API v1 aggregator
 │   ├── core/
-│   │   ├── config.py                # pydantic-settings (SQLite strictly prohibited)
-│   │   ├── exceptions.py            # Standardized HTTP error responses (401, 403, 404, 409, 422)
-│   │   └── security.py              # Argon2id password hashing and JWT token handling
+│   │   ├── config.py                # pydantic-settings (SQLite prohibited, URL validation via make_url)
+│   │   ├── exceptions.py            # Standardized HTTP error responses (401, 403, 404, 409, 422, 503)
+│   │   └── security.py              # Argon2id password hashing and SecretStr JWT token handling
 │   ├── db/
 │   │   ├── base.py                  # SQLAlchemy 2.0 DeclarativeBase and naming conventions
 │   │   ├── session.py               # AsyncEngine (asyncpg) and AsyncSessionLocal
 │   │   └── migrations/              # Alembic migrations & PostgreSQL immutability trigger
 │   ├── models/                      # SQLAlchemy 2.0 ORM Models
 │   ├── schemas/                     # Strict Pydantic v2 validation models
-│   ├── services/                    # Business rules and atomic transaction flows
+│   ├── services/                    # Business rules, atomic order transactions & reconciliation
+│   ├── reconcile.py                 # Administrative CLI for snapshot reconciliation
 │   └── main.py                      # FastAPI application entrypoint
 ├── tests/
-│   ├── conftest.py                  # Fixtures wired strictly to real PostgreSQL
+│   ├── conftest.py                  # Fixtures wired strictly to real PostgreSQL with safety guards
 │   ├── unit/                        # Security and hashing unit tests
-│   └── integration/                 # Concurrency stress tests (asyncio.gather) and flow tests
-├── docker-compose.yml
+│   └── integration/                 # Concurrency stress tests (asyncio.gather), failure & reconciliation tests
+├── docker-compose.yml               # Local development topology (with db-migrate container)
+├── docker-compose.prod.yml          # Hardened production dual-network topology (edge-net + internal-net)
 ├── Dockerfile
+└── pyproject.toml
 └── pyproject.toml
 ```
 
@@ -361,6 +367,22 @@ poetry run mypy src tests
 | `POST` | `/api/v1/orders/{id}/cancel` | Authenticated | Atomically cancel order, restock items with locks, and append `RETURN` |
 | `POST` | `/api/v1/inventory/movements` | **Admin** | Append manual stock movement (`IN`, `OUT`, `ADJUSTMENT`, `RETURN`) |
 | `GET` | `/api/v1/inventory/movements` | **Admin** | Query immutable audit log of inventory movements |
+| `GET` | `/api/v1/inventory/reconcile` | **Admin** | Run snapshot-consistent 3-level inventory ledger reconciliation |
+
+---
+
+## 🔍 Snapshot-Consistent Inventory Reconciliation
+
+StockFlow provides a built-in reconciliation engine executed under PostgreSQL `REPEATABLE READ, READ ONLY` transaction isolation. It performs a 3-tier integrity check:
+
+1. **Sequence Continuity:** Ensures per-product `movement_sequence` forms an unbroken $1, 2, \dots, N$ range without gaps or duplicates.
+2. **Chain Continuity:** Validates that each movement's `previous_stock` strictly matches the preceding movement's `new_stock`.
+3. **Arithmetic Integrity:** Verifies that physical balance `products.stock_quantity` strictly equals initial `OPENING` stock plus all signed ledger increments and decrements.
+
+### Executing via CLI:
+```bash
+poetry run python -m stockflow.reconcile
+```
 
 ---
 

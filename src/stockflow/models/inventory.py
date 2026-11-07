@@ -5,7 +5,16 @@ from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import CheckConstraint, DateTime, ForeignKey, Integer, String, event, func
+from sqlalchemy import (
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+    event,
+    func,
+)
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import Mapped, Mapper, mapped_column
 
@@ -19,6 +28,14 @@ class MovementType(StrEnum):
     OUT = "OUT"
     ADJUSTMENT = "ADJUSTMENT"
     RETURN = "RETURN"
+    OPENING = "OPENING"
+
+
+class AdjustmentDirection(StrEnum):
+    """Direction for manual inventory adjustments."""
+
+    INCREASE = "INCREASE"
+    DECREASE = "DECREASE"
 
 
 class InventoryMovement(UUIDPrimaryKeyMixin, Base):
@@ -26,13 +43,39 @@ class InventoryMovement(UUIDPrimaryKeyMixin, Base):
 
     __tablename__ = "inventory_movements"
     __table_args__ = (
+        UniqueConstraint(
+            "product_id",
+            "movement_sequence",
+            name="uq_inventory_movements_product_sequence",
+        ),
         CheckConstraint(
-            "type IN ('IN', 'OUT', 'ADJUSTMENT', 'RETURN')",
+            "type IN ('IN', 'OUT', 'ADJUSTMENT', 'RETURN', 'OPENING')",
             name="valid_movement_type",
         ),
         CheckConstraint("quantity > 0", name="movement_quantity_positive"),
         CheckConstraint("previous_stock >= 0", name="previous_stock_non_negative"),
         CheckConstraint("new_stock >= 0", name="new_stock_non_negative"),
+        CheckConstraint("movement_sequence >= 1", name="movement_sequence_positive"),
+        CheckConstraint(
+            "(type != 'ADJUSTMENT' AND adjustment_direction IS NULL) OR "
+            "(type = 'ADJUSTMENT' AND adjustment_direction IN ('INCREASE', 'DECREASE'))",
+            name="chk_inventory_movement_adjustment_direction",
+        ),
+        CheckConstraint(
+            """
+            (
+                (type IN ('IN', 'RETURN', 'OPENING') AND new_stock = previous_stock + quantity
+                 AND adjustment_direction IS NULL) OR
+                (type = 'OUT' AND new_stock = previous_stock - quantity
+                 AND adjustment_direction IS NULL) OR
+                (type = 'ADJUSTMENT' AND adjustment_direction = 'INCREASE'
+                 AND new_stock = previous_stock + quantity) OR
+                (type = 'ADJUSTMENT' AND adjustment_direction = 'DECREASE'
+                 AND new_stock = previous_stock - quantity)
+            )
+            """,
+            name="chk_inventory_movement_arithmetic",
+        ),
     )
 
     product_id: Mapped[UUID] = mapped_column(
@@ -41,10 +84,18 @@ class InventoryMovement(UUIDPrimaryKeyMixin, Base):
         index=True,
         nullable=False,
     )
+    movement_sequence: Mapped[int] = mapped_column(
+        Integer,
+        nullable=False,
+    )
     type: Mapped[str] = mapped_column(
         String(32),
         index=True,
         nullable=False,
+    )
+    adjustment_direction: Mapped[str | None] = mapped_column(
+        String(16),
+        nullable=True,
     )
     quantity: Mapped[int] = mapped_column(
         Integer,
