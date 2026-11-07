@@ -56,14 +56,20 @@ def test_settings_prohibits_sqlite_database_url() -> None:
         Settings(DATABASE_URL="sqlite+aiosqlite:///./test.db")
 
 
-def test_settings_rejects_insecure_secrets_and_defaults_in_production() -> None:
+def test_settings_rejects_insecure_secrets_and_defaults_in_production(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Ensure production environment strictly rejects default or blacklisted secrets."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
+
     with pytest.raises(ValidationError, match="cannot use known insecure or default keys"):
         Settings(
             _env_file=None,
             APP_ENV="production",
             SECRET_KEY="stockflow-dev-secret-jwt-key-safe-for-local-dev-only-2026",
             POSTGRES_PASSWORD="secure_prod_password_987!",
+            DATABASE_URL=None,
         )
 
     with pytest.raises(ValidationError, match="cannot use known insecure or default keys"):
@@ -72,6 +78,7 @@ def test_settings_rejects_insecure_secrets_and_defaults_in_production() -> None:
             APP_ENV="production",
             SECRET_KEY="change-this-super-secret-jwt-key-in-production-min-32-chars",
             POSTGRES_PASSWORD="secure_prod_password_987!",
+            DATABASE_URL=None,
         )
 
     with pytest.raises(ValidationError, match="cannot use the default development password"):
@@ -80,11 +87,17 @@ def test_settings_rejects_insecure_secrets_and_defaults_in_production() -> None:
             APP_ENV="production",
             SECRET_KEY="a-very-strong-production-secret-token-key-2026",
             POSTGRES_PASSWORD="stockflow_secret_password",
+            DATABASE_URL=None,
         )
 
 
-def test_settings_accepts_valid_production_configuration() -> None:
+def test_settings_accepts_valid_production_configuration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Ensure properly configured production settings pass validation."""
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("POSTGRES_PASSWORD", raising=False)
+
     valid_prod = Settings(
         _env_file=None,
         APP_ENV="production",
@@ -92,6 +105,7 @@ def test_settings_accepts_valid_production_configuration() -> None:
         POSTGRES_PASSWORD="strong_production_password_2026#",
         POSTGRES_HOST="db.internal.stockflow.io",
         POSTGRES_DB="stockflow_production_db",
+        DATABASE_URL=None,
     )
     assert valid_prod.APP_ENV == "production"
     assert (
