@@ -48,7 +48,7 @@ async def list_inventory_movements_endpoint(
     session: DBSessionDep,
     _admin_user: AdminUserDep,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    offset: Annotated[int, Query(ge=0, le=2_147_483_647)] = 0,
     product_id: Annotated[UUID | None, Query()] = None,
     movement_type: Annotated[MovementType | None, Query(alias="type")] = None,
 ) -> PaginatedResponse[InventoryMovementResponse]:

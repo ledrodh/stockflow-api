@@ -1,6 +1,7 @@
 import React from "react";
 import { LogIn, LogOut, ExternalLink, Activity } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import { isDemoEnvironment } from "../services/api";
 
 interface HeaderProps {
   onOpenLogin: () => void;
@@ -8,14 +9,22 @@ interface HeaderProps {
 
 export const Header: React.FC<HeaderProps> = ({ onOpenLogin }) => {
   const { user, logout } = useAuth();
+  const isDemo = isDemoEnvironment();
 
   return (
     <header className="h-16 bg-slate-900/60 backdrop-blur border-b border-slate-800 px-8 flex items-center justify-between shrink-0">
       <div className="flex items-center space-x-4">
-        <div className="flex items-center space-x-2 text-xs font-mono text-emerald-400 bg-emerald-950/60 px-3 py-1.5 rounded-full border border-emerald-500/30">
-          <Activity className="w-3.5 h-3.5 animate-pulse text-emerald-400" />
-          <span>PostgreSQL 16 ACID Online</span>
-        </div>
+        {isDemo ? (
+          <div className="flex items-center space-x-2 text-xs font-mono text-cyan-400 bg-cyan-950/60 px-3 py-1.5 rounded-full border border-cyan-500/30">
+            <Activity className="w-3.5 h-3.5 animate-pulse text-cyan-400" />
+            <span>Interactive Demo Mode</span>
+          </div>
+        ) : (
+          <div className="flex items-center space-x-2 text-xs font-mono text-emerald-400 bg-emerald-950/60 px-3 py-1.5 rounded-full border border-emerald-500/30">
+            <Activity className="w-3.5 h-3.5 animate-pulse text-emerald-400" />
+            <span>PostgreSQL 16 ACID Online</span>
+          </div>
+        )}
         <span className="text-xs text-slate-400 hidden md:inline">
           Concurrency control via <code className="text-slate-300 font-mono">SELECT FOR UPDATE</code>
         </span>

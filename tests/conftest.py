@@ -3,6 +3,7 @@
 import asyncio
 import os
 from collections.abc import AsyncGenerator
+from pathlib import Path
 
 import pytest
 from alembic import command
@@ -23,9 +24,10 @@ from stockflow.db.session import get_db_session
 from stockflow.main import app
 from stockflow.models.user import User, UserRole
 
+_test_host = "127.0.0.1" if settings.POSTGRES_HOST == "localhost" else settings.POSTGRES_HOST
 DEFAULT_TEST_DB_URL = (
     f"postgresql+asyncpg://{settings.POSTGRES_USER}:{settings.POSTGRES_PASSWORD}"
-    f"@{settings.POSTGRES_HOST}:{settings.POSTGRES_PORT}/stockflow_test_db"
+    f"@{_test_host}:{settings.POSTGRES_PORT}/stockflow_test_db"
 )
 TEST_DATABASE_URL = os.getenv("TEST_DATABASE_URL", DEFAULT_TEST_DB_URL)
 
@@ -58,7 +60,11 @@ _SCHEMA_INITIALIZED = False
 def _run_alembic_migrations(db_url: str) -> None:
     """Run real Alembic migrations to head in a background worker thread."""
     os.environ["ALEMBIC_DATABASE_URL"] = db_url
-    alembic_cfg = Config("alembic.ini")
+    project_root = Path(__file__).resolve().parent.parent
+    alembic_cfg = Config(str(project_root / "alembic.ini"))
+    alembic_cfg.set_main_option(
+        "script_location", str(project_root / "src" / "stockflow" / "db" / "migrations")
+    )
     alembic_cfg.set_main_option("sqlalchemy.url", db_url)
     command.upgrade(alembic_cfg, "head")
 

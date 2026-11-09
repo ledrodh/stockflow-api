@@ -1,10 +1,15 @@
 """Application configuration managed via pydantic-settings."""
 
+from collections.abc import Sequence
 from functools import lru_cache
+from pathlib import Path
+from typing import Any
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import make_url
+
+DotenvInput = str | Path | Sequence[str | Path] | None
 
 DEFAULT_INSECURE_SECRET_KEY = "stockflow-dev-secret-jwt-key-safe-for-local-dev-only-2026"
 DEFAULT_INSECURE_POSTGRES_PASSWORD = "stockflow_secret_password"
@@ -32,6 +37,14 @@ class Settings(BaseSettings):
         case_sensitive=True,
         extra="ignore",
     )
+
+    def __init__(
+        self,
+        _env_file: DotenvInput = ".env",
+        _env_file_encoding: str | None = "utf-8",
+        **values: Any,
+    ) -> None:
+        super().__init__(_env_file=_env_file, _env_file_encoding=_env_file_encoding, **values)
 
     # Application
     APP_NAME: str = "StockFlow API"

@@ -45,8 +45,17 @@ async def list_products_endpoint(
     session: DBSessionDep,
     current_user: OptionalCurrentUserDep,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
-    offset: Annotated[int, Query(ge=0)] = 0,
-    search: Annotated[str | None, Query(max_length=100)] = None,
+    offset: Annotated[int, Query(ge=0, le=2_147_483_647)] = 0,
+    search: Annotated[
+        str | None,
+        Query(
+            max_length=100,
+            pattern=r"^[^\x00]*$",
+            description=(
+                "Case-insensitive search filter for product name or SKU " "(null bytes forbidden)"
+            ),
+        ),
+    ] = None,
     include_inactive: Annotated[bool, Query()] = False,
 ) -> PaginatedResponse[ProductResponse]:
     """List products with limit/offset pagination and optional search filter."""

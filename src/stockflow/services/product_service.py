@@ -99,13 +99,15 @@ async def list_products(
         base_stmt = base_stmt.where(Product.is_active.is_(True))
 
     if search and search.strip():
-        pattern = f"%{search.strip()}%"
-        base_stmt = base_stmt.where(
-            or_(
-                Product.name.ilike(pattern),
-                Product.sku.ilike(pattern),
+        clean_search = search.replace("\x00", "").strip()
+        if clean_search:
+            pattern = f"%{clean_search}%"
+            base_stmt = base_stmt.where(
+                or_(
+                    Product.name.ilike(pattern),
+                    Product.sku.ilike(pattern),
+                )
             )
-        )
 
     count_stmt = select(func.count()).select_from(base_stmt.subquery())
     total = (await session.execute(count_stmt)).scalar_one()

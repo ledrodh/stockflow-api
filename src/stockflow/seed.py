@@ -4,6 +4,7 @@ import asyncio
 import os
 import sys
 from decimal import Decimal
+from uuid import uuid4
 
 from sqlalchemy import select
 
@@ -11,6 +12,7 @@ from stockflow.core.config import settings
 from stockflow.core.security import get_password_hash
 from stockflow.db.session import AsyncSessionLocal, engine
 from stockflow.models.inventory import InventoryMovement, MovementType
+from stockflow.models.order import Order
 from stockflow.models.product import Product
 from stockflow.models.user import User, UserRole
 
@@ -109,6 +111,7 @@ async def seed_demo_data() -> None:
             print(f"[OK] Admin created: {admin_email}")
 
         # 2. Customer User (non-production only)
+        customer: User | None = None
         if settings.APP_ENV != "production":
             customer_stmt = select(User).where(User.email == "customer@stockflow.io")
             customer = (await session.execute(customer_stmt)).scalar_one_or_none()
@@ -156,6 +159,73 @@ async def seed_demo_data() -> None:
                 print(f"[OK] Product inserted: {new_prod.sku} ({new_prod.stock_quantity} units)")
 
         await session.commit()
+
+        # 4. Create sample demo orders if none exist
+        from stockflow.schemas.order import OrderCreate, OrderItemCreate
+        from stockflow.services.order_service import cancel_order_atomic, create_order_atomic
+
+        order_stmt = select(Order)
+        existing_orders = (await session.execute(order_stmt)).first()
+        if existing_orders is None and customer is not None:
+            customer_id = customer.id
+            macbook_id = (
+                await session.execute(select(Product.id).where(Product.sku == "MACBOOK-M3-MAX"))
+            ).scalar_one()
+            mouse_id = (
+                await session.execute(select(Product.id).where(Product.sku == "MOUSE-MX-MASTER"))
+            ).scalar_one()
+            payload1 = OrderCreate(
+                items=[
+                    OrderItemCreate(product_id=macbook_id, quantity=1),
+                    OrderItemCreate(product_id=mouse_id, quantity=1),
+                ]
+            )
+            order1 = await create_order_atomic(
+                session=session,
+                user_id=customer_id,
+                payload=payload1,
+                idempotency_key=f"demo-seed-order-1-{uuid4()}",
+            )
+            print(f"[OK] Demo Order 1 created: {order1.id} (R$ {order1.total_amount})")
+
+            dell_id = (
+                await session.execute(select(Product.id).where(Product.sku == "DELL-ULTRA-34"))
+            ).scalar_one()
+            payload2 = OrderCreate(
+                items=[
+                    OrderItemCreate(product_id=dell_id, quantity=1),
+                ]
+            )
+            order2 = await create_order_atomic(
+                session=session,
+                user_id=customer_id,
+                payload=payload2,
+                idempotency_key=f"demo-seed-order-2-{uuid4()}",
+            )
+            print(f"[OK] Demo Order 2 created: {order2.id} (R$ {order2.total_amount})")
+
+            keyb_id = (
+                await session.execute(select(Product.id).where(Product.sku == "KEYB-LOGI-MX"))
+            ).scalar_one()
+            payload3 = OrderCreate(
+                items=[
+                    OrderItemCreate(product_id=keyb_id, quantity=2),
+                ]
+            )
+            order3 = await create_order_atomic(
+                session=session,
+                user_id=customer_id,
+                payload=payload3,
+                idempotency_key=f"demo-seed-order-3-{uuid4()}",
+            )
+            await cancel_order_atomic(
+                session=session,
+                order_id=order3.id,
+                user_id=customer_id,
+                is_admin=False,
+            )
+            print(f"[OK] Demo Order 3 created & cancelled (restocked): {order3.id}")
+
         print("\n[SUCCESS] Database populated successfully!")
 
     await engine.dispose()

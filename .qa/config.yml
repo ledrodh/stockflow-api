@@ -1,0 +1,47 @@
+schema_version: 1
+
+language: python
+framework: fastapi
+project_type: api
+
+profile: standard
+
+source_paths:
+  - src
+test_paths:
+  - tests
+
+thresholds:
+  coverage:
+    line_min: null
+    branch_min: null
+
+security:
+  fail_on_secrets: true
+  vulnerability_gate: null
+  allowed_exceptions:
+    - id: "DEV-SENTINEL-KEY"
+      fingerprint: "fa79c29c68db21a3c78feb3eb5a302e899a0e116face778e2f307451978d29a3"
+      reason: "Chave sentinela de desenvolvimento usada para validacao de rejeicao estrita em producao"
+      expires_at: "2026-12-31"
+      scope: "src/stockflow/core/config.py"
+    - id: "TEST-SYNTHETIC-KEY-1"
+      fingerprint: "507f7e92aa5634fe5bd0b00bdb99fbc0655ef72394aeeff646b7ac7cc896b6f9"
+      reason: "String sintetica para teste de rejeicao de chave default"
+      expires_at: "2026-12-31"
+      scope: "tests/unit/test_security_and_config.py"
+    - id: "TEST-SYNTHETIC-KEY-2"
+      fingerprint: "3ecda5122cc574ec0c0caf1b1651ea97e1eca8743bfef05a2caf5b97e89d71a6"
+      reason: "String sintetica para teste de rejeicao de chave blacklisted"
+      expires_at: "2026-12-31"
+      scope: "tests/unit/test_security_and_config.py"
+    - id: "TEST-SYNTHETIC-KEY-3"
+      fingerprint: "5f0446c12df81f719869dd59a31c6ae3710e2a792b1ea74fb47409c7a3cd593c"
+      reason: "String sintetica para teste de rejeicao de senha padrao do postgres"
+      expires_at: "2026-12-31"
+      scope: "tests/unit/test_security_and_config.py"
+
+api_testing:
+  enabled: false
+  schema_url: null
+  environment: disposable

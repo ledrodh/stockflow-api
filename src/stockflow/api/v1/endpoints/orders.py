@@ -57,7 +57,7 @@ async def list_orders_endpoint(
     session: DBSessionDep,
     current_user: CurrentUserDep,
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    offset: Annotated[int, Query(ge=0, le=2_147_483_647)] = 0,
 ) -> PaginatedResponse[OrderResponse]:
     """Retrieve a paginated list of orders."""
     is_admin = current_user.role == UserRole.ADMIN.value
